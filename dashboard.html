@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Copilot Proxy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300..700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-0: #08090a;
+  --bg-1: #0f1011;
+  --bg-2: #141516;
+  --bg-3: #191a1b;
+  --bg-4: #1e1f21;
+  --text-1: #f7f8f8;
+  --text-2: #b4bcd0;
+  --text-3: #8a8f98;
+  --text-4: #5a5e66;
+  --accent: #5e6ad2;
+  --accent-bright: #7170ff;
+  --accent-glow: rgba(113,112,255,0.12);
+  --green: #3dd68c;
+  --green-dim: rgba(61,214,140,0.12);
+  --red: #ef5f5f;
+  --red-dim: rgba(239,95,95,0.10);
+  --amber: #f0b429;
+  --violet: #a78bfa;
+  --border: rgba(255,255,255,0.06);
+  --font: 'Inter', -apple-system, system-ui, sans-serif;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, Menlo, monospace;
+}
+
+html { font-size: 13px; }
+
+body {
+  font-family: var(--font);
+  font-feature-settings: 'cv01', 'ss03';
+  background: var(--bg-0);
+  color: var(--text-2);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ---- top ambient glow ---- */
+body::before {
+  content: '';
+  position: fixed;
+  top: -180px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 900px;
+  height: 400px;
+  background: radial-gradient(ellipse at center, rgba(94,106,210,0.08) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ---- header ---- */
+.hdr {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  height: 48px; padding: 0 28px;
+  background: rgba(15,16,17,0.82);
+  backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  border-bottom: 1px solid var(--border);
+}
+
+.hdr-left { display: flex; align-items: center; gap: 12px; }
+
+.hdr-mark {
+  width: 20px; height: 20px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-bright) 100%);
+  border-radius: 5px;
+}
+
+.hdr-title {
+  font-size: 13px; font-weight: 600; color: var(--text-1);
+  letter-spacing: -0.2px;
+}
+
+.hdr-sep { width: 1px; height: 14px; background: var(--border); }
+
+.hdr-endpoint {
+  font-family: var(--mono); font-size: 11px; color: var(--text-4);
+  letter-spacing: -0.2px;
+}
+
+.hdr-right { display: flex; align-items: center; gap: 14px; }
+
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.hdr-tz { font-size: 11px; color: var(--text-4); font-family: var(--mono); }
+
+/* ---- layout ---- */
+.page { position: relative; z-index: 1; padding: 24px 28px 60px; }
+
+/* ---- stats strip ---- */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.stat {
+  background: var(--bg-1);
+  padding: 18px 20px;
+  display: flex; flex-direction: column; gap: 2px;
+  transition: background 0.15s;
+}
+.stat:hover { background: var(--bg-2); }
+
+.stat-num {
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -1.2px;
+  line-height: 1;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 11px; font-weight: 500;
+  color: var(--text-4);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+.stat-num.c-green { color: var(--green); }
+.stat-num.c-red { color: var(--red); }
+.stat-num.c-amber { color: var(--amber); }
+.stat-num.c-violet { color: var(--violet); }
+
+/* ---- model pills ---- */
+.models {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 16px; flex-wrap: wrap;
+  min-height: 24px;
+}
+
+.mpill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 4px 12px 4px 8px;
+  font-size: 11px; color: var(--text-2);
+  transition: border-color 0.15s, background 0.15s;
+}
+.mpill:hover { border-color: rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); }
+
+.mpill-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent-bright);
+  flex-shrink: 0;
+}
+
+.mpill-name { font-weight: 600; color: var(--text-1); }
+.mpill-meta { color: var(--text-4); font-family: var(--mono); font-size: 10px; }
+
+/* ---- toolbar ---- */
+.bar {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 14px; flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex; align-items: center;
+  background: rgba(255,255,255,0.03);
+  color: var(--text-3);
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit; font-size: 11px; font-weight: 500;
+  font-feature-settings: 'cv01', 'ss03';
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.btn:hover { background: rgba(255,255,255,0.06); color: var(--text-1); border-color: rgba(255,255,255,0.14); }
+.btn.on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 12px rgba(94,106,210,0.3);
+}
+
+.bar-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+
+.bar input[type="datetime-local"],
+.bar select {
+  background: rgba(255,255,255,0.03);
+  color: var(--text-2);
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-family: var(--mono); font-size: 10px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.bar input:focus, .bar select:focus { border-color: var(--accent-bright); }
+.bar select { font-family: var(--font); font-size: 11px; cursor: pointer; }
+
+.bar label {
+  font-size: 11px; color: var(--text-4);
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer; user-select: none;
+}
+.bar label input[type="checkbox"] { accent-color: var(--accent-bright); }
+
+/* ---- table ---- */
+.tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
+
+.tbl thead { position: sticky; top: 48px; z-index: 10; }
+
+.tbl th {
+  text-align: left;
+  padding: 8px 14px;
+  font-size: 10px; font-weight: 600;
+  color: var(--text-4);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.tbl th:first-child { border-radius: 8px 0 0 0; }
+.tbl th:last-child { border-radius: 0 8px 0 0; }
+
+.tbl td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  vertical-align: middle;
+  transition: background 0.1s;
+}
+
+.tbl tbody tr { cursor: pointer; }
+.tbl tbody tr:hover td { background: rgba(255,255,255,0.025); }
+.tbl tbody tr:last-child td { border-bottom: none; }
+
+/* cell types */
+.c-ts {
+  font-family: var(--mono); font-size: 11px; color: var(--text-4);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.c-model { color: var(--accent-bright); font-weight: 600; font-size: 12px; letter-spacing: -0.2px; white-space: nowrap; }
+
+.c-status {
+  font-family: var(--mono); font-weight: 600; font-size: 11px;
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 4px;
+}
+.c-status.ok { color: var(--green); background: var(--green-dim); }
+.c-status.err { color: var(--red); background: var(--red-dim); }
+
+.c-dur { font-family: var(--mono); font-size: 11px; color: var(--violet); font-variant-numeric: tabular-nums; }
+.c-tok { font-family: var(--mono); font-size: 11px; color: var(--amber); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 9999px;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.3px; text-transform: uppercase;
+}
+.b-stream { color: var(--accent-bright); background: var(--accent-glow); }
+.b-sync { color: var(--green); background: var(--green-dim); }
+
+.c-preview {
+  color: var(--text-4); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 0; /* allow table to control */
+}
+
+.c-error {
+  color: var(--red); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 0;
+}
+
+/* detail expand */
+.detail td { padding: 0 !important; border-bottom: 1px solid var(--border) !important; }
+.detail-body {
+  padding: 14px 16px;
+  background: var(--bg-3);
+  margin: 0 14px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.detail-body pre {
+  white-space: pre-wrap; word-break: break-all;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-3); line-height: 1.7;
+  max-height: 300px; overflow-y: auto;
+}
+.detail-body.has-error {
+  border-color: rgba(239,95,95,0.25);
+  background: rgba(239,95,95,0.04);
+}
+.detail-body.has-error pre {
+  color: var(--red);
+}
+.detail-error-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--red); margin-bottom: 8px;
+}
+.detail-req-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-4); margin: 12px 0 6px;
+}
+
+/* ---- detail drawer (modal-like panel) ---- */
+.drawer-overlay {
+  display: none;
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 200;
+}
+.drawer-overlay.open { display: block; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(860px, 90vw);
+  background: var(--bg-1);
+  border-left: 1px solid var(--border);
+  z-index: 201;
+  display: flex; flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+}
+.drawer-overlay.open .drawer { transform: translateX(0); }
+.drawer-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.drawer-hdr-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.drawer-close {
+  background: none; border: none; color: var(--text-4); font-size: 18px;
+  cursor: pointer; padding: 4px 8px; border-radius: 4px;
+}
+.drawer-close:hover { color: var(--text-1); background: rgba(255,255,255,0.06); }
+.drawer-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+.drawer-tab {
+  padding: 10px 16px;
+  font-size: 11px; font-weight: 600; color: var(--text-4);
+  cursor: pointer; border-bottom: 2px solid transparent;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  transition: all 0.12s;
+}
+.drawer-tab:hover { color: var(--text-2); }
+.drawer-tab.active { color: var(--accent-bright); border-bottom-color: var(--accent-bright); }
+.drawer-body {
+  flex: 1; overflow-y: auto; padding: 20px;
+}
+.drawer-body pre {
+  white-space: pre-wrap; word-break: break-all;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-3); line-height: 1.7;
+}
+.drawer-meta {
+  display: grid; grid-template-columns: 100px 1fr;
+  gap: 6px 12px; margin-bottom: 16px;
+  font-size: 11px;
+}
+.drawer-meta-k { color: var(--text-4); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+.drawer-meta-v { color: var(--text-2); font-family: var(--mono); }
+.sse-event {
+  margin-bottom: 8px; padding: 8px 12px;
+  background: var(--bg-3); border-radius: 6px;
+  border-left: 3px solid var(--accent);
+}
+.sse-event.evt-error { border-left-color: var(--red); }
+.sse-event.evt-message_start { border-left-color: var(--green); }
+.sse-event.evt-message_delta { border-left-color: var(--amber); }
+.sse-event.evt-message_stop { border-left-color: var(--violet); }
+.sse-type {
+  font-size: 10px; font-weight: 600; color: var(--accent-bright);
+  text-transform: uppercase; margin-bottom: 4px;
+}
+.sse-event.evt-error .sse-type { color: var(--red); }
+.sse-event.evt-message_start .sse-type { color: var(--green); }
+.sse-event.evt-message_delta .sse-type { color: var(--amber); }
+.sse-event.evt-message_stop .sse-type { color: var(--violet); }
+.sse-data {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--text-3); line-height: 1.6;
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 200px; overflow-y: auto;
+}
+
+/* empty state */
+.empty-wrap {
+  text-align: center; padding: 80px 20px;
+}
+.empty-ring {
+  width: 48px; height: 48px; margin: 0 auto 16px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.empty-ring::after {
+  content: '';
+  width: 8px; height: 8px;
+  background: var(--text-4);
+  border-radius: 50%;
+}
+.empty-text { color: var(--text-4); font-size: 13px; font-weight: 500; }
+.empty-sub { color: var(--text-4); font-size: 11px; margin-top: 4px; opacity: 0.6; }
+
+/* responsive */
+@media (max-width: 900px) {
+  .stats { grid-template-columns: repeat(3, 1fr); }
+  .stat-num { font-size: 22px; }
+  .charts { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .page { padding: 16px; }
+  .hdr { padding: 0 16px; }
+}
+
+/* ---- charts ---- */
+.charts {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 1px;
+  background: var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.chart-card {
+  background: var(--bg-1);
+  padding: 14px 16px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+.chart-title {
+  font-size: 11px; font-weight: 600; color: var(--text-4);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.chart-scroll {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+  cursor: grab;
+  position: relative;
+}
+.chart-scroll:active { cursor: grabbing; }
+.chart-scroll::-webkit-scrollbar { height: 4px; }
+.chart-scroll::-webkit-scrollbar-track { background: transparent; }
+.chart-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+.chart-canvas {
+  height: 110px;
+  display: block;
+}
+
+/* model share bars */
+.share-list { display: flex; flex-direction: column; gap: 8px; flex: 1; justify-content: center; }
+.share-item { display: flex; flex-direction: column; gap: 3px; }
+.share-row { display: flex; align-items: center; justify-content: space-between; }
+.share-name { font-size: 11px; font-weight: 500; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+.share-pct { font-family: var(--mono); font-size: 10px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.share-track { height: 4px; background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden; }
+.share-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+
+/* chart tooltip */
+.chart-tip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 300;
+  background: rgba(20,21,22,0.94);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-1);
+  line-height: 1.5;
+  white-space: nowrap;
+  display: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.chart-tip.show { display: block; }
+.chart-tip .tip-label { color: var(--text-4); font-size: 10px; margin-bottom: 2px; }
+.chart-tip .tip-row { display: flex; align-items: center; gap: 6px; }
+.chart-tip .tip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.chart-tip .tip-val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<header class="hdr">
+  <div class="hdr-left">
+    <div class="hdr-mark"></div>
+    <span class="hdr-title">Copilot Proxy</span>
+    <div class="hdr-sep"></div>
+    <span class="hdr-endpoint">__PORT__/v1/messages</span>
+  </div>
+  <div class="hdr-right">
+    <div class="live-dot" id="live-dot"></div>
+    <span class="hdr-tz">CST</span>
+  </div>
+</header>
+
+<div class="page">
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-num" id="s-total">0</div>
+      <div class="stat-label">Requests</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num c-green" id="s-ok">0</div>
+      <div class="stat-label">Success</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num c-red" id="s-err">0</div>
+      <div class="stat-label">Failed</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num c-amber" id="s-tokens">0</div>
+      <div class="stat-label">Tokens</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num c-violet" id="s-avg">0</div>
+      <div class="stat-label">Avg Latency</div>
+    </div>
+  </div>
+
+  <div class="models" id="model-stats"></div>
+
+  <div class="charts">
+    <div class="chart-card">
+      <div class="chart-title">Requests by Hour</div>
+      <div class="chart-scroll" id="chart-scroll">
+        <canvas class="chart-canvas" id="chart-hourly"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Model Share</div>
+      <div class="share-list" id="chart-models"></div>
+    </div>
+  </div>
+
+  <div class="bar">
+    <button class="btn" onclick="refresh()">Refresh</button>
+    <button class="btn on" onclick="toggleAuto()" id="btn-auto">Live</button>
+    <div class="bar-sep"></div>
+    <input type="datetime-local" id="f-from" step="1">
+    <span style="color:var(--text-4);font-size:11px">~</span>
+    <input type="datetime-local" id="f-to" step="1">
+    <select id="f-model"><option value="">All models</option></select>
+    <button class="btn" onclick="applyFilter()">Filter</button>
+    <button class="btn" onclick="clearFilter()">Reset</button>
+    <div class="bar-sep"></div>
+    <label><input type="checkbox" id="show-errors" onchange="refresh()"> Errors only</label>
+    <label><input type="checkbox" id="show-body" onchange="refresh()"> Body</label>
+  </div>
+
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Model</th>
+        <th>Status</th>
+        <th>Latency</th>
+        <th>Tokens</th>
+        <th>Type</th>
+        <th style="width:100%">Preview</th>
+      </tr>
+    </thead>
+    <tbody id="log-body"></tbody>
+  </table>
+
+</div>
+
+<!-- Detail Drawer -->
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer(event)">
+  <div class="drawer" onclick="event.stopPropagation()">
+    <div class="drawer-hdr">
+      <span class="drawer-hdr-title" id="drawer-title">Request Detail</span>
+      <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+    </div>
+    <div class="drawer-tabs" id="drawer-tabs"></div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </div>
+</div>
+
+<div class="chart-tip" id="chart-tip"></div>
+
+<script>
+let autoRefresh = true, timer, filters = {};
+
+function toggleAuto() {
+  autoRefresh = !autoRefresh;
+  const btn = document.getElementById('btn-auto');
+  const dot = document.getElementById('live-dot');
+  btn.textContent = autoRefresh ? 'Live' : 'Paused';
+  btn.classList.toggle('on', autoRefresh);
+  dot.style.animationPlayState = autoRefresh ? 'running' : 'paused';
+  dot.style.opacity = autoRefresh ? '1' : '0.25';
+  if (autoRefresh) startTimer(); else clearInterval(timer);
+}
+
+function startTimer() { clearInterval(timer); timer = setInterval(refresh, 2000); }
+
+function applyFilter() {
+  filters.from = document.getElementById('f-from').value || undefined;
+  filters.to = document.getElementById('f-to').value || undefined;
+  filters.model = document.getElementById('f-model').value || undefined;
+  refresh();
+}
+
+function clearFilter() {
+  filters = {};
+  document.getElementById('f-from').value = '';
+  document.getElementById('f-to').value = '';
+  document.getElementById('f-model').value = '';
+  refresh();
+}
+
+function fmt(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 10_000) return (n / 1_000).toFixed(1) + 'K';
+  return n.toLocaleString();
+}
+
+async function refresh() {
+  const params = new URLSearchParams();
+  if (filters.from) params.set('from', filters.from.replace('T', ' '));
+  if (filters.to) params.set('to', filters.to.replace('T', ' '));
+  if (filters.model) params.set('model', filters.model);
+  params.set('limit', '200');
+
+  const errorsOnly = document.getElementById('show-errors').checked;
+  if (errorsOnly) params.set('errors_only', '1');
+  const r = await fetch('/api/logs?' + params);
+  const { logs: data, stats, modelStats } = await r.json();
+
+  document.getElementById('s-total').textContent = fmt(stats.total);
+  document.getElementById('s-ok').textContent = fmt(stats.ok);
+  document.getElementById('s-err').textContent = fmt(stats.err);
+  document.getElementById('s-tokens').textContent = fmt(stats.tokens);
+  document.getElementById('s-avg').textContent = (stats.avgMs || 0) + 'ms';
+
+  // model pills
+  const ms = document.getElementById('model-stats');
+  ms.innerHTML = (modelStats || []).map(m =>
+    `<div class="mpill">
+      <span class="mpill-dot"></span>
+      <span class="mpill-name">${esc(m.model)}</span>
+      <span class="mpill-meta">${m.count}x &middot; ${fmt(m.tokens)} tok &middot; ${m.avgMs}ms</span>
+    </div>`
+  ).join('');
+
+  // model filter
+  const sel = document.getElementById('f-model');
+  const cur = sel.value;
+  if (modelStats?.length) {
+    sel.innerHTML = '<option value="">All models</option>' +
+      modelStats.map(m => `<option value="${esc(m.model)}"${cur === m.model ? ' selected' : ''}>${esc(m.model)}</option>`).join('');
+  }
+
+  const showBody = document.getElementById('show-body').checked;
+  const tbody = document.getElementById('log-body');
+
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="7">
+      <div class="empty-wrap">
+        <div class="empty-ring"></div>
+        <div class="empty-text">No requests yet</div>
+        <div class="empty-sub">Requests to /v1/messages will appear here</div>
+      </div>
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = data.map((l, i) => {
+    const sc = l.status < 400 ? 'ok' : 'err';
+    const badge = l.stream
+      ? '<span class="badge b-stream">SSE</span>'
+      : '<span class="badge b-sync">Sync</span>';
+    const tok = (l.input_tokens || l.output_tokens)
+      ? `${fmt(l.input_tokens)}<span style="color:var(--text-4);margin:0 2px">&rarr;</span>${fmt(l.output_tokens)}`
+      : '<span style="color:var(--text-4)">-</span>';
+    const preview = l.error || l.preview || '';
+    const previewClass = l.error ? 'c-error' : 'c-preview';
+
+    let rows = `<tr onclick="openDetail(${l.id})">
+      <td class="c-ts">${l.ts || ''}</td>
+      <td class="c-model">${esc(l.model || '-')}</td>
+      <td><span class="c-status ${sc}">${l.status}</span></td>
+      <td class="c-dur">${l.duration_ms ? l.duration_ms + 'ms' : '-'}</td>
+      <td class="c-tok">${tok}</td>
+      <td>${badge}</td>
+      <td class="${previewClass}">${esc(preview)}</td>
+    </tr>`;
+    return rows;
+  }).join('');
+}
+
+function toggleDetail(i) {
+  // legacy, kept for compat
+}
+
+// --- Detail Drawer ---
+let drawerCache = {};
+
+async function openDetail(id) {
+  const overlay = document.getElementById('drawer-overlay');
+  overlay.classList.add('open');
+  document.getElementById('drawer-title').textContent = `Request #${id}`;
+
+  // Fetch full detail
+  let detail = drawerCache[id];
+  if (!detail) {
+    const r = await fetch(`/api/logs/${id}`);
+    detail = await r.json();
+    drawerCache[id] = detail;
+  }
+
+  const tabs = document.getElementById('drawer-tabs');
+  const body = document.getElementById('drawer-body');
+
+  const hasReqBody = !!detail.request_body;
+  const hasRespBody = !!detail.response_body;
+  const hasError = !!detail.error;
+  const isSSE = detail.stream;
+
+  let tabList = ['overview'];
+  if (hasReqBody) tabList.push('request');
+  if (hasRespBody && isSSE) tabList.push('sse');
+  if (hasRespBody && !isSSE) tabList.push('response');
+  if (hasError) tabList.push('error');
+
+  function renderTab(tab) {
+    tabs.innerHTML = tabList.map(t =>
+      `<div class="drawer-tab${t===tab?' active':''}" onclick="switchTab('${t}',${id})">${t}</div>`
+    ).join('');
+
+    if (tab === 'overview') {
+      body.innerHTML = `
+        <div class="drawer-meta">
+          <span class="drawer-meta-k">Time</span><span class="drawer-meta-v">${esc(detail.ts)}</span>
+          <span class="drawer-meta-k">Model</span><span class="drawer-meta-v">${esc(detail.model||'-')}</span>
+          <span class="drawer-meta-k">Status</span><span class="drawer-meta-v">${detail.status}</span>
+          <span class="drawer-meta-k">Duration</span><span class="drawer-meta-v">${detail.duration_ms}ms</span>
+          <span class="drawer-meta-k">Type</span><span class="drawer-meta-v">${detail.stream?'SSE Stream':'Sync'}</span>
+          <span class="drawer-meta-k">Input Tok</span><span class="drawer-meta-v">${fmt(detail.input_tokens||0)}</span>
+          <span class="drawer-meta-k">Output Tok</span><span class="drawer-meta-v">${fmt(detail.output_tokens||0)}</span>
+        </div>
+        ${detail.error ? `<div class="detail-body has-error"><div class="detail-error-label">Error</div><pre>${esc(detail.error)}</pre></div>` : ''}
+        ${detail.request_summary ? `<div class="detail-body"><div class="detail-req-label">Summary</div><pre>${esc(detail.request_summary)}</pre></div>` : ''}
+      `;
+    } else if (tab === 'request') {
+      let formatted = detail.request_body;
+      try { formatted = JSON.stringify(JSON.parse(formatted), null, 2); } catch {}
+      body.innerHTML = `<pre>${esc(formatted)}</pre>`;
+    } else if (tab === 'response') {
+      let formatted = detail.response_body;
+      try { formatted = JSON.stringify(JSON.parse(formatted), null, 2); } catch {}
+      body.innerHTML = `<pre>${esc(formatted)}</pre>`;
+    } else if (tab === 'sse') {
+      body.innerHTML = renderSSE(detail.response_body);
+    } else if (tab === 'error') {
+      body.innerHTML = `<div class="detail-body has-error"><pre>${esc(detail.error)}</pre></div>`;
+    }
+  }
+
+  window._currentDetail = { tabList, detail, renderTab };
+  renderTab(tabList[0]);
+}
+
+function switchTab(tab, id) {
+  if (window._currentDetail) window._currentDetail.renderTab(tab);
+}
+
+function closeDrawer(e) {
+  if (e && e.target !== document.getElementById('drawer-overlay')) return;
+  document.getElementById('drawer-overlay').classList.remove('open');
+}
+
+// ESC to close
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+function renderSSE(raw) {
+  if (!raw) return '<span style="color:var(--text-4)">No SSE data</span>';
+  const lines = raw.split('\n');
+  let events = [];
+  let currentEvent = null;
+
+  for (const line of lines) {
+    if (line.startsWith('event: ')) {
+      if (currentEvent) events.push(currentEvent);
+      currentEvent = { type: line.slice(7).trim(), data: '' };
+    } else if (line.startsWith('data: ')) {
+      const dataStr = line.slice(6);
+      if (!currentEvent) currentEvent = { type: 'data', data: '' };
+      currentEvent.data += (currentEvent.data ? '\n' : '') + dataStr;
+    } else if (line.trim() === '' && currentEvent) {
+      events.push(currentEvent);
+      currentEvent = null;
+    }
+  }
+  if (currentEvent) events.push(currentEvent);
+
+  if (!events.length) return `<pre>${esc(raw.slice(0, 5000))}</pre>`;
+
+  // Group content_block_delta events to avoid flooding
+  let html = `<div style="margin-bottom:12px;color:var(--text-4);font-size:11px">${events.length} SSE events</div>`;
+
+  let deltaBuffer = [];
+  function flushDeltas() {
+    if (!deltaBuffer.length) return '';
+    const texts = deltaBuffer.map(d => {
+      try {
+        const j = JSON.parse(d);
+        if (j.delta?.text) return j.delta.text;
+        if (j.delta?.thinking) return j.delta.thinking;
+        return d.slice(0, 120);
+      } catch { return d.slice(0, 120); }
+    });
+    const count = deltaBuffer.length;
+    deltaBuffer = [];
+    const combined = texts.join('');
+    return `<div class="sse-event evt-content_block_delta">
+      <div class="sse-type">content_block_delta × ${count}</div>
+      <div class="sse-data">${esc(combined.slice(0, 2000))}${combined.length > 2000 ? '...' : ''}</div>
+    </div>`;
+  }
+
+  for (const evt of events) {
+    if (evt.type === 'content_block_delta') {
+      deltaBuffer.push(evt.data);
+      continue;
+    }
+    html += flushDeltas();
+
+    let prettyData = evt.data;
+    try { prettyData = JSON.stringify(JSON.parse(evt.data), null, 2); } catch {}
+
+    html += `<div class="sse-event evt-${esc(evt.type)}">
+      <div class="sse-type">${esc(evt.type)}</div>
+      <div class="sse-data">${esc(prettyData.slice(0, 3000))}</div>
+    </div>`;
+  }
+  html += flushDeltas();
+  return html;
+}
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ---- Charts ----
+const COLORS = {
+  green: '#3dd68c', red: '#ef5f5f',
+  accent: '#7170ff',
+  grid: 'rgba(255,255,255,0.04)', label: '#5a5e66',
+};
+const MODEL_COLORS = ['#7170ff','#3dd68c','#f0b429','#a78bfa','#ef5f5f','#60a5fa','#f472b6'];
+
+const tip = document.getElementById('chart-tip');
+function showTip(e, html) {
+  tip.innerHTML = html;
+  tip.classList.add('show');
+  const x = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+  const y = e.clientY - tip.offsetHeight - 8;
+  tip.style.left = x + 'px';
+  tip.style.top = (y < 4 ? e.clientY + 16 : y) + 'px';
+}
+function hideTip() { tip.classList.remove('show'); }
+
+let hourlyHits = [], cachedHourly = [];
+
+function drawHourlyChart(data) {
+  cachedHourly = data;
+  const canvas = document.getElementById('chart-hourly');
+  const scroll = document.getElementById('chart-scroll');
+  if (!data.length || !scroll.getBoundingClientRect().width) return;
+
+  const BAR_W = 18;
+  const GAP = 3;
+  const slotW = BAR_W + GAP;
+  const totalW = data.length * slotW + 40;
+  const h = 110;
+  const dateH = 20;
+  const pad = { t: dateH + 2, b: 16 };
+  const ch = h - pad.t - pad.b;
+
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = totalW * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = totalW + 'px';
+  canvas.style.height = h + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const maxVal = Math.max(...data.map(d => d.total), 1);
+  hourlyHits = [];
+  ctx.clearRect(0, 0, totalW, h);
+
+  // --- date header bands ---
+  const daySpans = [];
+  let curDay = '', spanStart = 0;
+  data.forEach((d, i) => {
+    const day = d.slot.slice(0, 10);
+    if (day !== curDay) {
+      if (curDay) daySpans.push({ day: curDay, x1: spanStart * slotW, x2: i * slotW });
+      curDay = day; spanStart = i;
+    }
+  });
+  if (curDay) daySpans.push({ day: curDay, x1: spanStart * slotW, x2: data.length * slotW });
+
+  const dayColors = ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.04)'];
+  daySpans.forEach((span, si) => {
+    // alternate bg for readability
+    ctx.fillStyle = dayColors[si % 2];
+    ctx.fillRect(span.x1, 0, span.x2 - span.x1, h);
+
+    // date label
+    const weekday = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(span.day + 'T12:00:00').getDay()];
+    const label = `${span.day.slice(5)}  ${weekday}`;
+    const cx = (span.x1 + span.x2) / 2;
+    ctx.font = '600 11px Inter, system-ui';
+    ctx.fillStyle = '#7170ff';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, cx, 14);
+
+    // separator line
+    if (si > 0) {
+      ctx.strokeStyle = 'rgba(113,112,255,0.2)'; ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(span.x1, 0); ctx.lineTo(span.x1, h); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  });
+
+  // grid
+  for (let i = 0; i <= 2; i++) {
+    const y = pad.t + ch * (1 - i / 2);
+    ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(totalW, y); ctx.stroke();
+  }
+
+  data.forEach((d, i) => {
+    const x = i * slotW + slotW / 2;
+    const okH = Math.max((d.ok / maxVal) * ch, d.ok ? 1 : 0);
+    const errH = Math.max((d.err / maxVal) * ch, d.err ? 1 : 0);
+    const totalH = okH + errH;
+    const barY = pad.t + ch - totalH;
+
+    ctx.fillStyle = COLORS.green;
+    ctx.beginPath(); ctx.roundRect(x - BAR_W / 2, barY + errH, BAR_W, okH, [0, 0, 2, 2]); ctx.fill();
+
+    if (errH > 0) {
+      ctx.fillStyle = COLORS.red;
+      ctx.beginPath(); ctx.roundRect(x - BAR_W / 2, barY, BAR_W, errH, [2, 2, 0, 0]); ctx.fill();
+    }
+
+    // hour labels every 3h
+    const hour = d.slot.slice(11, 13);
+    if (parseInt(hour) % 3 === 0) {
+      ctx.font = '9px Inter, system-ui'; ctx.textAlign = 'center';
+      ctx.fillStyle = COLORS.label;
+      ctx.fillText(hour + ':00', x, h - 3);
+    }
+
+    hourlyHits.push({ x: i * slotW, x2: (i + 1) * slotW, d });
+  });
+
+  // scroll to end (latest)
+  scroll.scrollLeft = totalW;
+}
+
+// --- drag to scroll ---
+(function() {
+  const el = document.getElementById('chart-scroll');
+  let isDrag = false, startX = 0, startScroll = 0;
+  el.addEventListener('mousedown', e => {
+    isDrag = true; startX = e.pageX; startScroll = el.scrollLeft;
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!isDrag) return;
+    el.scrollLeft = startScroll - (e.pageX - startX);
+  });
+  document.addEventListener('mouseup', () => { isDrag = false; });
+})();
+
+// hover
+document.getElementById('chart-hourly').addEventListener('mousemove', function(e) {
+  const scroll = document.getElementById('chart-scroll');
+  const rect = this.getBoundingClientRect();
+  const mx = e.clientX - rect.left + scroll.scrollLeft;
+  const hit = hourlyHits.find(h => mx >= h.x && mx <= h.x2);
+  if (hit) {
+    const day = hit.d.slot.slice(0, 10);
+    const hour = hit.d.slot.slice(11, 13);
+    showTip(e, `<div class="tip-label">${day} ${hour}:00</div>
+      <div class="tip-row"><span class="tip-dot" style="background:${COLORS.green}"></span>Success <span class="tip-val">${hit.d.ok.toLocaleString()}</span></div>
+      <div class="tip-row"><span class="tip-dot" style="background:${COLORS.red}"></span>Failed <span class="tip-val">${hit.d.err.toLocaleString()}</span></div>
+      <div class="tip-row" style="color:var(--text-3)">Tokens <span class="tip-val">${fmt(hit.d.tokens)}</span></div>`);
+  } else hideTip();
+});
+document.getElementById('chart-hourly').addEventListener('mouseleave', hideTip);
+
+function drawModelShare(data) {
+  const el = document.getElementById('chart-models');
+  if (!data.length) { el.innerHTML = '<span style="color:var(--text-4);font-size:11px">No data</span>'; return; }
+
+  el.innerHTML = data.slice(0, 5).map((m, i) => {
+    const color = MODEL_COLORS[i % MODEL_COLORS.length];
+    return `<div class="share-item">
+      <div class="share-row">
+        <span class="share-name">${esc(m.model || 'unknown')}</span>
+        <span class="share-pct">${m.pct}% (${fmt(m.count)})</span>
+      </div>
+      <div class="share-track">
+        <div class="share-fill" style="width:${m.pct}%;background:${color}"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+let chartLoaded = false;
+async function loadCharts() {
+  try {
+    const r = await fetch('/api/stats/charts');
+    const { hourly, modelShare } = await r.json();
+
+    // fill all 24h per day
+    if (hourly.length) {
+      const map = new Map(hourly.map(h => [h.slot, h]));
+      const firstDay = hourly[0].slot.slice(0, 10);
+      const lastDay = hourly[hourly.length - 1].slot.slice(0, 10);
+      const filled = [];
+      const d = new Date(firstDay + 'T00:00:00');
+      const end = new Date(lastDay + 'T23:00:00');
+      while (d <= end) {
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const hh = String(d.getHours()).padStart(2, '0');
+        const slot = `${yyyy}-${mm}-${dd} ${hh}`;
+        filled.push(map.get(slot) || { slot, total: 0, ok: 0, err: 0, tokens: 0 });
+        d.setHours(d.getHours() + 1);
+      }
+      drawHourlyChart(filled);
+    } else {
+      drawHourlyChart([]);
+    }
+
+    drawModelShare(modelShare);
+    chartLoaded = true;
+  } catch (e) { console.warn('chart load failed', e); }
+}
+
+// Refresh charts on window resize
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (chartLoaded) loadCharts(); }, 200);
+});
+
+refresh();
+loadCharts();
+startTimer();
+// reload charts every 30s
+setInterval(loadCharts, 30000);
+</script>
+</body>
+</html>

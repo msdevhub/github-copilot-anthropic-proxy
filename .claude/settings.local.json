@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/leway/.claude/**)",
+      "Bash(ps:*)",
+      "Bash(kill 38636)",
+      "Bash(nohup /Users/leway/.nvm/versions/node/v22.22.0/bin/node /Users/leway/Projects/copilot-anthropic-proxy/server.mjs)",
+      "Bash(&)",
+      "Bash(echo \"restarted, pid=$!\")",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4819/)",
+      "mcp__puppeteer__puppeteer_navigate",
+      "mcp__puppeteer__puppeteer_screenshot",
+      "mcp__puppeteer__puppeteer_evaluate"
+    ]
+  }
+}
