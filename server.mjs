@@ -15,6 +15,7 @@ const TOKEN_CACHE_PATH = join(STATE_DIR, "credentials", "github-copilot.token.js
 const __DIR = dirname(new URL(import.meta.url).pathname);
 const DB_PATH = join(__DIR, "proxy-logs.db");
 const DASHBOARD_PATH = join(__DIR, "dashboard.html");
+const PUBLIC_DIR = join(__DIR, "public");
 const API_KEYS_PATH = join(__DIR, "api-keys.json");
 const TOKENS_PATH = join(__DIR, "tokens.json");
 
@@ -454,6 +455,21 @@ async function handleRequest(req, res) {
   if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(dashboardHTML());
+    return;
+  }
+
+  // Static assets (CSS/JS from public/)
+  if (req.method === "GET" && (req.url === "/dashboard.css" || req.url === "/dashboard.js")) {
+    const file = req.url === "/dashboard.css" ? "dashboard.css" : "dashboard.js";
+    const contentType = req.url === "/dashboard.css" ? "text/css; charset=utf-8" : "application/javascript; charset=utf-8";
+    try {
+      const content = readFileSync(join(PUBLIC_DIR, file), "utf8");
+      res.writeHead(200, { "Content-Type": contentType });
+      res.end(content);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+    }
     return;
   }
 
