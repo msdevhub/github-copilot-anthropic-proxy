@@ -1,2 +1,5 @@
 *.log
-*-logs.dbapi-keys.json\ntokens.json
+*.db
+node_modules/
+api-keys.json
+tokens.json
