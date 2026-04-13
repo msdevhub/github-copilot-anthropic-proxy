@@ -3,16 +3,144 @@
 
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 
-// ─── Module imports ──────────────────────────────────────────────────────────
-import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_PATH, __DIR, fullError } from "./lib/utils.mjs";
-import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
-import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
-import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken } from "./lib/tokens.mjs";
-import { checkApiKey, checkDashboardAuth, handleLoginPost, loginPageHTML, DASHBOARD_PASSWORD } from "./lib/auth.mjs";
-import { db, addLog } from "./lib/database.mjs";
+const PORT = 4819;
+const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
+const STATE_DIR = join(homedir(), ".openclaw");
+const TOKEN_CACHE_PATH = join(STATE_DIR, "credentials", "github-copilot.token.json");
+const __DIR = dirname(new URL(import.meta.url).pathname);
+const DB_PATH = join(__DIR, "proxy-logs.db");
+const DASHBOARD_PATH = join(__DIR, "dashboard.html");
+const PUBLIC_DIR = join(__DIR, "public");
+const API_KEYS_PATH = join(__DIR, "api-keys.json");
+const TOKENS_PATH = join(__DIR, "tokens.json");
+
+// ─── API Key helpers (defined early — used by CLI block below) ────────────────
+function loadApiKeys() {
+  try {
+    if (!existsSync(API_KEYS_PATH)) return [];
+    const data = JSON.parse(readFileSync(API_KEYS_PATH, "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+function saveApiKeys(keys) {
+  writeFileSync(API_KEYS_PATH, JSON.stringify(keys, null, 2));
+}
+
+// ─── Rate Limiting (sliding window in memory) ────────────────────────────────
+// Per API-key counters: { keyName → { rpm: [timestamps], rpd: [timestamps], tpm: [{ts, tokens}] } }
+const rateLimitCounters = new Map();
+
+function getRateLimitCounters(keyName) {
+  if (!rateLimitCounters.has(keyName)) {
+    rateLimitCounters.set(keyName, { rpm: [], rpd: [], tpm: [] });
+  }
+  return rateLimitCounters.get(keyName);
+}
+
+/** Prune expired entries from sliding windows. */
+function pruneCounters(counters) {
+  const now = Date.now();
+  const oneMinAgo = now - 60_000;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayMs = todayStart.getTime();
+
+  counters.rpm = counters.rpm.filter(ts => ts > oneMinAgo);
+  counters.rpd = counters.rpd.filter(ts => ts > todayMs);
+  counters.tpm = counters.tpm.filter(e => e.ts > oneMinAgo);
+}
+
+/**
+ * Check rate limits for an API key. Returns null if OK, or an error message string if exceeded.
+ * Also returns which limit was hit and the reset time.
+ */
+function checkRateLimit(keyName) {
+  const keys = loadApiKeys();
+  const keyObj = keys.find(k => k.name === keyName);
+  if (!keyObj || !keyObj.rate_limit) return null;
+
+  const rl = keyObj.rate_limit;
+  const counters = getRateLimitCounters(keyName);
+  pruneCounters(counters);
+
+  if (rl.rpm && rl.rpm > 0 && counters.rpm.length >= rl.rpm) {
+    return { message: `Rate limit exceeded: ${rl.rpm} RPM`, limit: rl.rpm, remaining: 0, resetMs: counters.rpm[0] + 60_000 - Date.now() };
+  }
+  if (rl.rpd && rl.rpd > 0 && counters.rpd.length >= rl.rpd) {
+    const tomorrow = new Date();
+    tomorrow.setHours(24, 0, 0, 0);
+    return { message: `Rate limit exceeded: ${rl.rpd} RPD`, limit: rl.rpd, remaining: 0, resetMs: tomorrow.getTime() - Date.now() };
+  }
+  if (rl.tpm && rl.tpm > 0) {
+    const totalTokens = counters.tpm.reduce((s, e) => s + e.tokens, 0);
+    if (totalTokens >= rl.tpm) {
+      return { message: `Rate limit exceeded: ${rl.tpm} TPM`, limit: rl.tpm, remaining: 0, resetMs: counters.tpm[0].ts + 60_000 - Date.now() };
+    }
+  }
+  return null;
+}
+
+/** Record a request for rate limiting. Call after the request is accepted. */
+function recordRequest(keyName) {
+  const counters = getRateLimitCounters(keyName);
+  const now = Date.now();
+  counters.rpm.push(now);
+  counters.rpd.push(now);
+}
+
+/** Record token usage for TPM tracking. Call after response completes. */
+function recordTokenUsage(keyName, tokenCount) {
+  if (!keyName || !tokenCount) return;
+  const counters = getRateLimitCounters(keyName);
+  counters.tpm.push({ ts: Date.now(), tokens: tokenCount });
+}
+
+/** Get current usage stats for an API key. */
+function getKeyUsageStats(keyName) {
+  const keys = loadApiKeys();
+  const keyObj = keys.find(k => k.name === keyName);
+  const rl = keyObj?.rate_limit || {};
+  const counters = getRateLimitCounters(keyName);
+  pruneCounters(counters);
+
+  const tpmUsed = counters.tpm.reduce((s, e) => s + e.tokens, 0);
+  return {
+    rpm: { used: counters.rpm.length, limit: rl.rpm || 0 },
+    rpd: { used: counters.rpd.length, limit: rl.rpd || 0 },
+    tpm: { used: tpmUsed, limit: rl.tpm || 0 },
+  };
+}
+
+// ─── Token management (multi-token support) ─────────────────────────────────
+function loadTokens() {
+  try {
+    if (!existsSync(TOKENS_PATH)) return [];
+    const data = JSON.parse(readFileSync(TOKENS_PATH, "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+function saveTokens(tokens) {
+  writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+}
+
+function getTokenType(token) {
+  if (token.startsWith("gho_")) return "gho_";
+  if (token.startsWith("ghu_")) return "ghu_";
+  if (token.startsWith("github_pat_")) return "github_pat_";
+  return "unknown";
+}
+
+function maskToken(token) {
+  if (!token || token.length <= 8) return token || "";
+  return token.slice(0, 8) + "...";
+}
 
 // ─── CLI: --add-key <name> ───────────────────────────────────────────────────
 const addKeyIdx = process.argv.indexOf("--add-key");
@@ -25,6 +153,265 @@ if (addKeyIdx !== -1) {
   saveApiKeys(keys);
   console.log(`✓ API key added for "${keyName}":\n  ${newKey}`);
   process.exit(0);
+}
+
+// --- CST Time ---
+function cst(date = new Date()) {
+  return new Date(date.getTime() + 8 * 3600_000).toISOString().replace("T", " ").slice(0, 23);
+}
+
+// ─── API Key Auth ─────────────────────────────────────────────────────────────
+
+/** Returns true if the request carries a valid API key, or if no keys are configured. */
+function checkApiKey(req, returnName) {
+  const keys = loadApiKeys();
+  if (keys.length === 0) return returnName ? { valid: true, name: null } : true; // backward-compatible: no keys file → open
+
+  // Accept via x-api-key header or Authorization: Bearer ***
+  const fromHeader = req.headers["x-api-key"] || "";
+  const auth = req.headers["authorization"] || "";
+  const fromBearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const candidate = fromHeader || fromBearer;
+  const match = keys.find(k => k.key === candidate);
+  if (returnName) return { valid: !!match, name: match?.name || null, tokenName: match?.token_name || null };
+  return !!match;
+}
+
+// ─── Dashboard Password Auth ──────────────────────────────────────────────────
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "";
+// Simple in-memory session store  { token → true }
+const VALID_SESSIONS = new Set();
+
+function generateSessionToken() {
+  return randomBytes(24).toString("hex");
+}
+
+function parseCookies(req) {
+  const header = req.headers["cookie"] || "";
+  const cookies = {};
+  for (const part of header.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k) cookies[k.trim()] = decodeURIComponent(rest.join("="));
+  }
+  return cookies;
+}
+
+/** Returns true if the request is authenticated for the dashboard. */
+function checkDashboardAuth(req) {
+  if (!DASHBOARD_PASSWORD) return true; // no password set → open
+  const cookies = parseCookies(req);
+  return VALID_SESSIONS.has(cookies["dash_session"] || "");
+}
+
+/** Renders a styled login page matching the dashboard's dark theme. */
+function loginPageHTML(error = "") {
+  const errHtml = error
+    ? `<p style="color:#f87171;margin:0 0 1rem;font-size:.875rem;">${error}</p>`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Proxy Dashboard — Login</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0f1117; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #e2e8f0;
+  }
+  .card {
+    background: #1a1d27; border: 1px solid #2d3048; border-radius: 12px;
+    padding: 2.5rem 2rem; width: 100%; max-width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  }
+  h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.25rem; }
+  .sub { color: #64748b; font-size: .85rem; margin-bottom: 1.75rem; }
+  label { display: block; font-size: .8125rem; color: #94a3b8; margin-bottom: .4rem; font-weight: 500; }
+  input[type=password] {
+    width: 100%; padding: .625rem .875rem; background: #0f1117; border: 1px solid #2d3048;
+    border-radius: 8px; color: #e2e8f0; font-size: .9375rem; outline: none;
+    transition: border-color .15s;
+  }
+  input[type=password]:focus { border-color: #6366f1; }
+  button {
+    width: 100%; margin-top: 1.25rem; padding: .7rem; background: #6366f1; color: #fff;
+    border: none; border-radius: 8px; font-size: .9375rem; font-weight: 600; cursor: pointer;
+    transition: background .15s;
+  }
+  button:hover { background: #4f46e5; }
+  .emoji { font-size: 2rem; margin-bottom: 1rem; display: block; }
+</style>
+</head>
+<body>
+<div class="card">
+  <span class="emoji">🍟</span>
+  <h1>Proxy Dashboard</h1>
+  <p class="sub">Enter the dashboard password to continue.</p>
+  ${errHtml}
+  <form method="POST" action="/__login">
+    <label for="pw">Password</label>
+    <input type="password" id="pw" name="password" autofocus autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+</body>
+</html>`;
+}
+
+/** Handles POST /__login — verifies password, sets cookie, redirects. */
+async function handleLoginPost(req, res) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const body = Buffer.concat(chunks).toString();
+  // Parse application/x-www-form-urlencoded
+  const params = Object.fromEntries(
+    body.split("&").map(p => p.split("=").map(s => decodeURIComponent(s.replace(/\+/g, " "))))
+  );
+  if (params.password === DASHBOARD_PASSWORD) {
+    const token = generateSessionToken();
+    VALID_SESSIONS.add(token);
+    res.writeHead(302, {
+      "Location": "/",
+      "Set-Cookie": `dash_session=${token}; HttpOnly; SameSite=Strict; Path=/`,
+    });
+    res.end();
+  } else {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(loginPageHTML("Incorrect password. Please try again."));
+  }
+}
+
+// --- SQLite ---
+const db = new DatabaseSync(DB_PATH);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    model TEXT,
+    status INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    stream INTEGER DEFAULT 0,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    preview TEXT,
+    request_summary TEXT,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
+  CREATE INDEX IF NOT EXISTS idx_logs_model ON logs(model, ts DESC);
+`);
+
+// Add columns for full request/response body (idempotent)
+try { db.exec("ALTER TABLE logs ADD COLUMN request_body TEXT"); } catch {}
+try { db.exec("ALTER TABLE logs ADD COLUMN response_body TEXT"); } catch {}
+try { db.exec("ALTER TABLE logs ADD COLUMN token_name TEXT"); } catch {}
+try { db.exec("ALTER TABLE logs ADD COLUMN api_key_name TEXT"); } catch {}
+
+const insertStmt = db.prepare(`INSERT INTO logs (ts, model, status, duration_ms, stream, input_tokens, output_tokens, preview, request_summary, error, request_body, response_body, token_name, api_key_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+
+function fullError(err) {
+  const parts = [];
+  let e = err;
+  while (e) {
+    parts.push(e.stack || e.message || String(e));
+    e = e.cause;
+  }
+  return parts.join('\n  caused by: ');
+}
+
+function addLog(entry) {
+  const ts = cst();
+  insertStmt.run(ts, entry.model || null, entry.status, entry.durationMs || 0, entry.stream ? 1 : 0, entry.usage?.input || 0, entry.usage?.output || 0, entry.preview || null, entry.requestSummary || null, entry.error || null, (entry.requestBody || "").slice(0, 512000) || null, (entry.responseBody || "").slice(0, 512000) || null, entry.tokenName || null, entry.apiKeyName || null);
+  const icon = entry.status < 400 ? "✓" : "✗";
+  const dur = entry.durationMs ? ` ${entry.durationMs}ms` : "";
+  const tokens = entry.usage ? ` [in:${entry.usage.input} out:${entry.usage.output}]` : "";
+  console.log(`${icon} ${ts.slice(11)} ${entry.model || "-"}  ${entry.status}${dur}${tokens}  ${entry.error || ""}`);
+}
+
+// --- Token Management ---
+let cachedToken = null;
+/** Per-token-name cache: { name → { token, expiresAt, baseUrl, tokenName } } */
+const tokenCacheByName = new Map();
+
+function loadGitHubTokenFromProfiles() {
+  const searchPaths = [
+    join(STATE_DIR, "agents", "main", "agent", "auth-profiles.json"),
+    join(STATE_DIR, "agents", "researcher", "agent", "auth-profiles.json"),
+    join(STATE_DIR, "credentials", "auth-profiles.json"),
+  ];
+  for (const storePath of searchPaths) {
+    try {
+      const store = JSON.parse(readFileSync(storePath, "utf8"));
+      const profile = store.profiles?.["github-copilot:github"];
+      if (profile?.type === "token" && profile.token) return profile.token;
+    } catch {}
+  }
+  return process.env.COPILOT_GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "";
+}
+
+/** Returns { token, name } for the active GitHub token. Checks tokens.json first, then falls back. */
+function getActiveGitHubToken() {
+  const tokens = loadTokens();
+  const active = tokens.find(t => t.active);
+  if (active) return { token: active.token, name: active.name };
+  const fallback = loadGitHubTokenFromProfiles();
+  if (fallback) return { token: fallback, name: "(default)" };
+  return { token: "", name: "" };
+}
+
+function deriveBaseUrl(token, endpoints) {
+  // Prefer endpoints.api from token exchange response (supports enterprise)
+  if (endpoints?.api) return endpoints.api.replace(/\/+$/, "");
+  const m = token.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
+  if (!m) return "https://api.individual.githubcopilot.com";
+  const host = m[1].replace(/^https?:\/\//, "").replace(/^proxy\./i, "api.");
+  return `https://${host}`;
+}
+
+/** Exchange a GitHub token for a Copilot API token. Raw helper (no caching). */
+async function exchangeGitHubToken(githubToken, tokenName) {
+  if (!githubToken) throw new Error("No GitHub token found");
+  const res = await fetch(COPILOT_TOKEN_URL, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${githubToken}` },
+  });
+  if (!res.ok) throw new Error(`Token exchange failed: HTTP ${res.status}`);
+  const data = await res.json();
+  const expiresAt = typeof data.expires_at === "number"
+    ? (data.expires_at < 1e11 ? data.expires_at * 1000 : data.expires_at)
+    : parseInt(data.expires_at, 10) * (parseInt(data.expires_at, 10) < 1e11 ? 1000 : 1);
+  const result = { token: data.token, expiresAt, baseUrl: deriveBaseUrl(data.token, data.endpoints), tokenName };
+  console.log(`🔗 Token exchanged — base URL: ${result.baseUrl} (token: ${tokenName})`);
+  return result;
+}
+
+/** Get a Copilot API token by token name (from tokens.json). Uses per-name cache. */
+async function getTokenByName(name) {
+  const cached = tokenCacheByName.get(name);
+  if (cached && cached.expiresAt - Date.now() > 300_000) return cached;
+  const tokens = loadTokens();
+  const target = tokens.find(t => t.name === name);
+  if (!target) throw new Error(`Token "${name}" not found in tokens.json`);
+  const result = await exchangeGitHubToken(target.token, name);
+  tokenCacheByName.set(name, result);
+  return result;
+}
+
+async function getToken() {
+  if (cachedToken && cachedToken.expiresAt - Date.now() > 300_000) return cachedToken;
+  const { token: githubToken, name: tokenName } = getActiveGitHubToken();
+  // Only use file-based cache when using default token (not tokens.json)
+  if (tokenName === "(default)") {
+    try {
+      const cached = JSON.parse(readFileSync(TOKEN_CACHE_PATH, "utf8"));
+      if (cached.token && cached.expiresAt - Date.now() > 300_000) {
+        cachedToken = { token: cached.token, expiresAt: cached.expiresAt, baseUrl: deriveBaseUrl(cached.token), tokenName };
+        return cachedToken;
+      }
+    } catch {}
+  }
+  cachedToken = await exchangeGitHubToken(githubToken, tokenName);
+  return cachedToken;
 }
 
 // --- Dashboard HTML ---
@@ -194,7 +581,7 @@ async function handleRequest(req, res) {
     tokens.forEach(t => t.active = false);
     target.active = true;
     saveTokens(tokens);
-    clearCachedToken();
+    cachedToken = null;
     console.log(`🔄 Active token switched to: ${name}`);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, name }));
@@ -211,7 +598,7 @@ async function handleRequest(req, res) {
     tokens.splice(idx, 1);
     if (wasActive && tokens.length > 0) tokens[0].active = true;
     saveTokens(tokens);
-    if (wasActive) clearCachedToken();
+    if (wasActive) cachedToken = null;
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -265,7 +652,7 @@ async function handleRequest(req, res) {
     const isFirst = tokens.length === 0;
     tokens.push({ name, token: tokenValue, active: isFirst, username });
     saveTokens(tokens);
-    if (isFirst) clearCachedToken();
+    if (isFirst) cachedToken = null;
     res.writeHead(201, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, name, active: isFirst, username }));
     return;
@@ -396,7 +783,7 @@ async function handleRequest(req, res) {
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       type: "error",
-      error: { type: "authentication_error", message: "Invalid API key. Provide a valid key via x-api-key header or Authorization: Bearer <key>" },
+      error: { type: "authentication_error", message: "Invalid API key. Provide a valid key via x-api-key header or Authorization: Bearer <key>." },
     }));
     return;
   }
@@ -487,7 +874,7 @@ async function handleRequest(req, res) {
 
     logEntry.status = upstream.status;
 
-    // Upstream error — capture full response body
+    // 上游返回错误时，捕获完整响应体
     if (upstream.status >= 400) {
       let errBody = '';
       try {
