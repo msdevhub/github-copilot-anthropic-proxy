@@ -846,15 +846,33 @@ body::before {
         Callers must provide a valid API key via <code style="color:var(--accent-bright)">x-api-key</code> header or <code style="color:var(--accent-bright)">Authorization: Bearer</code>. If no keys are configured, all requests are allowed.
       </div>
       <div id="apikey-list"></div>
-      <div class="token-add-row" style="flex-wrap:wrap">
-        <input type="text" class="token-input" id="add-key-name" placeholder="API key name (e.g. hermes, cursor)" style="min-width:160px">
-        <select class="token-input" id="add-key-token" style="min-width:120px">
-          <option value="">Default (active)</option>
-        </select>
-        <input type="number" class="token-input" id="add-key-rpm" placeholder="RPM (0=unlimited)" style="width:110px" min="0" value="0">
-        <input type="number" class="token-input" id="add-key-rpd" placeholder="RPD (0=unlimited)" style="width:110px" min="0" value="0">
-        <input type="number" class="token-input" id="add-key-tpm" placeholder="TPM (0=unlimited)" style="width:120px" min="0" value="0">
-        <button class="btn" onclick="addApiKey()">Generate Key</button>
+      <div class="token-add-row" style="flex-wrap:wrap;gap:8px">
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:160px;flex:1">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Name</label>
+          <input type="text" class="token-input" id="add-key-name" placeholder="e.g. hermes, cursor" style="width:100%">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:120px">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Bound Token</label>
+          <select class="token-input" id="add-key-token" style="width:100%">
+            <option value="">Default (active)</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;width:110px" title="Requests per minute. 0 = unlimited.">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">RPM</label>
+          <input type="number" class="token-input" id="add-key-rpm" placeholder="0" style="width:100%" min="0" value="0">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;width:110px" title="Requests per day. 0 = unlimited.">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">RPD</label>
+          <input type="number" class="token-input" id="add-key-rpd" placeholder="0" style="width:100%" min="0" value="0">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;width:120px" title="Tokens per minute (input + output). 0 = unlimited.">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">TPM</label>
+          <input type="number" class="token-input" id="add-key-tpm" placeholder="0" style="width:100%" min="0" value="0">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;justify-content:flex-end">
+          <label style="font-size:10px;color:transparent">&nbsp;</label>
+          <button class="btn" onclick="addApiKey()">Generate Key</button>
+        </div>
       </div>
     </div>
 
@@ -1609,13 +1627,12 @@ async function addApiKey() {
   const tokenEl = document.getElementById('add-key-token');
   const name = nameEl.value.trim();
   if (!name) { alert('Please enter an API key name'); return; }
+  const rpm = Math.max(0, parseInt(document.getElementById('add-key-rpm').value) || 0);
+  const rpd = Math.max(0, parseInt(document.getElementById('add-key-rpd').value) || 0);
+  const tpm = Math.max(0, parseInt(document.getElementById('add-key-tpm').value) || 0);
   const payload = {
     name,
-    rate_limit: {
-      rpm: parseInt(document.getElementById('add-key-rpm').value) || 0,
-      rpd: parseInt(document.getElementById('add-key-rpd').value) || 0,
-      tpm: parseInt(document.getElementById('add-key-tpm').value) || 0,
-    }
+    rate_limit: { rpm, rpd, tpm }
   };
   if (tokenEl.value) payload.token_name = tokenEl.value;
   try {
@@ -1674,9 +1691,9 @@ async function saveRLModal() {
   const keyName = document.getElementById('rl-modal-key').value;
   const payload = {
     rate_limit: {
-      rpm: parseInt(document.getElementById('rl-modal-rpm').value) || 0,
-      rpd: parseInt(document.getElementById('rl-modal-rpd').value) || 0,
-      tpm: parseInt(document.getElementById('rl-modal-tpm').value) || 0,
+      rpm: Math.max(0, parseInt(document.getElementById('rl-modal-rpm').value) || 0),
+      rpd: Math.max(0, parseInt(document.getElementById('rl-modal-rpd').value) || 0),
+      tpm: Math.max(0, parseInt(document.getElementById('rl-modal-tpm').value) || 0),
     },
     token_name: document.getElementById('rl-modal-token').value || null,
   };
