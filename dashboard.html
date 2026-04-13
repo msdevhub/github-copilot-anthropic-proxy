@@ -105,6 +105,36 @@ body::before {
 
 .hdr-tz { font-size: 11px; color: var(--text-4); font-family: var(--mono); }
 
+/* ---- top tabs ---- */
+.top-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 28px;
+  background: rgba(15,16,17,0.6);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 48px; z-index: 99;
+  backdrop-filter: blur(12px);
+}
+
+.top-tab {
+  padding: 10px 20px;
+  font-size: 12px; font-weight: 600; color: var(--text-4);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  letter-spacing: 0.3px;
+  transition: all 0.15s;
+  user-select: none;
+}
+.top-tab:hover { color: var(--text-2); }
+.top-tab.active {
+  color: var(--accent-bright);
+  border-bottom-color: var(--accent-bright);
+}
+
+/* ---- tab content ---- */
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
 /* ---- layout ---- */
 .page { position: relative; z-index: 1; padding: 24px 28px 60px; }
 
@@ -230,7 +260,7 @@ body::before {
 /* ---- table ---- */
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
 
-.tbl thead { position: sticky; top: 48px; z-index: 10; }
+.tbl thead { position: sticky; top: 96px; z-index: 10; }
 
 .tbl th {
   text-align: left;
@@ -287,7 +317,7 @@ body::before {
 .c-preview {
   color: var(--text-4); font-size: 11px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 0; /* allow table to control */
+  max-width: 0;
 }
 
 .c-error {
@@ -440,6 +470,7 @@ body::before {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .page { padding: 16px; }
   .hdr { padding: 0 16px; }
+  .top-tabs { padding: 0 16px; }
 }
 
 /* ---- charts ---- */
@@ -517,6 +548,186 @@ body::before {
 .chart-tip .tip-row { display: flex; align-items: center; gap: 6px; }
 .chart-tip .tip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .chart-tip .tip-val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* ---- token management ---- */
+.token-section {
+  background: var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.token-section-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-1);
+  cursor: pointer;
+  user-select: none;
+}
+.token-section-title {
+  font-size: 11px; font-weight: 600;
+  color: var(--text-4);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.token-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 1px;
+  background: var(--border);
+}
+@media (max-width: 800px) { .token-grid { grid-template-columns: 1fr; } }
+.token-card {
+  background: var(--bg-1);
+  padding: 16px;
+}
+.token-active-badge {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 16px; font-weight: 600; color: var(--text-1);
+  margin-bottom: 10px;
+}
+.token-active-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  flex-shrink: 0;
+}
+.token-active-meta {
+  font-size: 11px; color: var(--text-4);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.token-active-meta span { display: flex; align-items: center; gap: 6px; }
+.token-active-meta .label { color: var(--text-4); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; min-width: 65px; font-size: 10px; }
+.token-active-meta .val { color: var(--text-2); font-family: var(--mono); }
+.token-list-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  transition: background 0.12s;
+  margin-bottom: 2px;
+}
+.token-list-item:hover { background: rgba(255,255,255,0.03); }
+.token-list-item.active { background: var(--accent-glow); border: 1px solid rgba(113,112,255,0.2); }
+.token-list-item .token-radio { accent-color: var(--accent-bright); cursor: pointer; }
+.token-list-item .token-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.token-list-item .token-name { font-size: 12px; font-weight: 600; color: var(--text-1); }
+.token-list-item .token-detail { font-size: 10px; color: var(--text-4); font-family: var(--mono); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.token-list-item .token-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.token-add-row {
+  display: flex; gap: 6px; margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.token-input {
+  background: rgba(255,255,255,0.03);
+  color: var(--text-2);
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font: inherit; font-size: 11px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.token-input:focus { border-color: var(--accent-bright); }
+.token-input-wide { flex: 1; min-width: 0; }
+.token-chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 6px; border-radius: 4px;
+  font-size: 9px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+.token-chip.type-gho { color: var(--green); background: var(--green-dim); }
+.token-chip.type-ghu { color: var(--violet); background: rgba(167,139,250,0.12); }
+.token-chip.type-github_pat { color: var(--amber); background: rgba(240,180,41,0.12); }
+.token-chip.type-unknown { color: var(--text-4); background: rgba(255,255,255,0.04); }
+.c-token { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+
+/* ---- rate limit usage bars ---- */
+.rl-bar-wrap {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 4px;
+}
+.rl-bar-label {
+  font-size: 9px; font-weight: 600; color: var(--text-4);
+  text-transform: uppercase; letter-spacing: 0.3px;
+  min-width: 28px;
+}
+.rl-bar-track {
+  flex: 1; height: 4px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 2px; overflow: hidden;
+}
+.rl-bar-fill {
+  height: 100%; border-radius: 2px;
+  background: var(--accent-bright);
+  transition: width 0.3s, background 0.3s;
+}
+.rl-bar-fill.warn { background: var(--amber); }
+.rl-bar-fill.crit { background: var(--red); }
+.rl-bar-val {
+  font-family: var(--mono); font-size: 9px; color: var(--text-4);
+  min-width: 60px; text-align: right;
+}
+
+/* ---- settings section card ---- */
+.settings-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+.settings-card-title {
+  font-size: 12px; font-weight: 600; color: var(--text-1);
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* rate limit edit modal */
+.modal-overlay {
+  display: none;
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 300;
+  align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  width: 360px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.modal-title {
+  font-size: 14px; font-weight: 600; color: var(--text-1);
+  margin-bottom: 16px;
+}
+.modal-field {
+  margin-bottom: 12px;
+}
+.modal-field label {
+  display: block; font-size: 11px; color: var(--text-4);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+.modal-field input {
+  width: 100%;
+  background: rgba(255,255,255,0.03);
+  color: var(--text-2);
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-family: var(--mono); font-size: 12px;
+  outline: none;
+}
+.modal-field input:focus { border-color: var(--accent-bright); }
+.modal-field .hint {
+  font-size: 10px; color: var(--text-4); margin-top: 2px;
+}
+.modal-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 16px;
+}
 </style>
 </head>
 <body>
@@ -531,82 +742,145 @@ body::before {
   <div class="hdr-right">
     <div class="live-dot" id="live-dot"></div>
     <span class="hdr-tz">CST</span>
+    <button class="btn" onclick="refresh()">Refresh</button>
+    <button class="btn on" onclick="toggleAuto()" id="btn-auto">Live</button>
   </div>
 </header>
 
+<div class="top-tabs">
+  <div class="top-tab active" data-tab="logs" onclick="switchMainTab('logs')">Logs</div>
+  <div class="top-tab" data-tab="settings" onclick="switchMainTab('settings')">Settings</div>
+  <div class="top-tab" data-tab="charts" onclick="switchMainTab('charts')">Charts</div>
+</div>
+
 <div class="page">
 
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-num" id="s-total">0</div>
-      <div class="stat-label">Requests</div>
-    </div>
-    <div class="stat">
-      <div class="stat-num c-green" id="s-ok">0</div>
-      <div class="stat-label">Success</div>
-    </div>
-    <div class="stat">
-      <div class="stat-num c-red" id="s-err">0</div>
-      <div class="stat-label">Failed</div>
-    </div>
-    <div class="stat">
-      <div class="stat-num c-amber" id="s-tokens">0</div>
-      <div class="stat-label">Tokens</div>
-    </div>
-    <div class="stat">
-      <div class="stat-num c-violet" id="s-avg">0</div>
-      <div class="stat-label">Avg Latency</div>
-    </div>
-  </div>
+  <!-- ==================== TAB: LOGS ==================== -->
+  <div class="tab-content active" id="tab-logs">
 
-  <div class="models" id="model-stats"></div>
-
-  <div class="charts">
-    <div class="chart-card">
-      <div class="chart-title">Requests by Hour</div>
-      <div class="chart-scroll" id="chart-scroll">
-        <canvas class="chart-canvas" id="chart-hourly"></canvas>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-num" id="s-total">0</div>
+        <div class="stat-label">Requests</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num c-green" id="s-ok">0</div>
+        <div class="stat-label">Success</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num c-red" id="s-err">0</div>
+        <div class="stat-label">Failed</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num c-amber" id="s-tokens">0</div>
+        <div class="stat-label">Tokens</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num c-violet" id="s-avg">0</div>
+        <div class="stat-label">Avg Latency</div>
       </div>
     </div>
-    <div class="chart-card">
-      <div class="chart-title">Model Share</div>
-      <div class="share-list" id="chart-models"></div>
+
+    <div class="models" id="model-stats"></div>
+
+    <div class="bar">
+      <div class="bar-sep"></div>
+      <input type="datetime-local" id="f-from" step="1">
+      <span style="color:var(--text-4);font-size:11px">~</span>
+      <input type="datetime-local" id="f-to" step="1">
+      <select id="f-model"><option value="">All models</option></select>
+      <select id="f-token"><option value="">All tokens</option></select>
+      <button class="btn" onclick="applyFilter()">Filter</button>
+      <button class="btn" onclick="clearFilter()">Reset</button>
+      <div class="bar-sep"></div>
+      <label><input type="checkbox" id="show-errors" onchange="refresh()"> Errors only</label>
+      <label><input type="checkbox" id="show-body" onchange="refresh()"> Body</label>
     </div>
+
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Token</th>
+          <th>API Key</th>
+          <th>Model</th>
+          <th>Status</th>
+          <th>Latency</th>
+          <th>Tokens</th>
+          <th>Type</th>
+          <th style="width:100%">Preview</th>
+        </tr>
+      </thead>
+      <tbody id="log-body"></tbody>
+    </table>
+
   </div>
 
-  <div class="bar">
-    <button class="btn" onclick="refresh()">Refresh</button>
-    <button class="btn on" onclick="toggleAuto()" id="btn-auto">Live</button>
-    <div class="bar-sep"></div>
-    <input type="datetime-local" id="f-from" step="1">
-    <span style="color:var(--text-4);font-size:11px">~</span>
-    <input type="datetime-local" id="f-to" step="1">
-    <select id="f-model"><option value="">All models</option></select>
-    <button class="btn" onclick="applyFilter()">Filter</button>
-    <button class="btn" onclick="clearFilter()">Reset</button>
-    <div class="bar-sep"></div>
-    <label><input type="checkbox" id="show-errors" onchange="refresh()"> Errors only</label>
-    <label><input type="checkbox" id="show-body" onchange="refresh()"> Body</label>
+  <!-- ==================== TAB: SETTINGS ==================== -->
+  <div class="tab-content" id="tab-settings">
+
+    <!-- Token Management -->
+    <div class="settings-card">
+      <div class="settings-card-title">Token Management</div>
+      <div class="token-grid">
+        <div class="token-card" style="border:none;padding:12px 0 0">
+          <div class="chart-title">Active Token</div>
+          <div id="active-token-info"><span style="color:var(--text-4)">Loading...</span></div>
+        </div>
+        <div class="token-card" style="border:none;padding:12px 0 0">
+          <div class="chart-title">Configured Tokens</div>
+          <div id="token-list"></div>
+          <div class="token-add-row">
+            <input type="text" class="token-input" id="add-token-name" placeholder="Name">
+            <input type="text" class="token-input token-input-wide" id="add-token-value" placeholder="GitHub token (gho_..., github_pat_...)">
+            <button class="btn" onclick="addToken()">Add</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Key Management -->
+    <div class="settings-card">
+      <div class="settings-card-title">API Key Management</div>
+      <div style="color:var(--text-4);font-size:11px;margin-bottom:12px">
+        Callers must provide a valid API key via <code style="color:var(--accent-bright)">x-api-key</code> header or <code style="color:var(--accent-bright)">Authorization: Bearer</code>. If no keys are configured, all requests are allowed.
+      </div>
+      <div id="apikey-list"></div>
+      <div class="token-add-row" style="flex-wrap:wrap">
+        <input type="text" class="token-input" id="add-key-name" placeholder="API key name (e.g. hermes, cursor)" style="min-width:160px">
+        <select class="token-input" id="add-key-token" style="min-width:120px">
+          <option value="">Default (active)</option>
+        </select>
+        <input type="number" class="token-input" id="add-key-rpm" placeholder="RPM (0=unlimited)" style="width:110px" min="0" value="0">
+        <input type="number" class="token-input" id="add-key-rpd" placeholder="RPD (0=unlimited)" style="width:110px" min="0" value="0">
+        <input type="number" class="token-input" id="add-key-tpm" placeholder="TPM (0=unlimited)" style="width:120px" min="0" value="0">
+        <button class="btn" onclick="addApiKey()">Generate Key</button>
+      </div>
+    </div>
+
   </div>
 
-  <table class="tbl">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Model</th>
-        <th>Status</th>
-        <th>Latency</th>
-        <th>Tokens</th>
-        <th>Type</th>
-        <th style="width:100%">Preview</th>
-      </tr>
-    </thead>
-    <tbody id="log-body"></tbody>
-  </table>
+  <!-- ==================== TAB: CHARTS ==================== -->
+  <div class="tab-content" id="tab-charts">
+
+    <div class="charts">
+      <div class="chart-card">
+        <div class="chart-title">Requests by Hour</div>
+        <div class="chart-scroll" id="chart-scroll">
+          <canvas class="chart-canvas" id="chart-hourly"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Model Share</div>
+        <div class="share-list" id="chart-models"></div>
+      </div>
+    </div>
+
+  </div>
 
 </div>
 
-<!-- Detail Drawer -->
+<!-- Detail Drawer (global, not affected by tabs) -->
 <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer(event)">
   <div class="drawer" onclick="event.stopPropagation()">
     <div class="drawer-hdr">
@@ -618,10 +892,57 @@ body::before {
   </div>
 </div>
 
+<!-- Rate Limit Edit Modal -->
+<div class="modal-overlay" id="rl-modal" onclick="if(event.target===this)closeRLModal()">
+  <div class="modal-box">
+    <div class="modal-title" id="rl-modal-title">Edit Rate Limits</div>
+    <input type="hidden" id="rl-modal-key">
+    <div class="modal-field">
+      <label>Bound Token</label>
+      <select class="token-input" id="rl-modal-token" style="width:100%">
+        <option value="">Default (active)</option>
+      </select>
+    </div>
+    <div class="modal-field">
+      <label>RPM (Requests Per Minute)</label>
+      <input type="number" id="rl-modal-rpm" min="0" value="0">
+      <div class="hint">0 = unlimited</div>
+    </div>
+    <div class="modal-field">
+      <label>RPD (Requests Per Day)</label>
+      <input type="number" id="rl-modal-rpd" min="0" value="0">
+      <div class="hint">0 = unlimited</div>
+    </div>
+    <div class="modal-field">
+      <label>TPM (Tokens Per Minute)</label>
+      <input type="number" id="rl-modal-tpm" min="0" value="0">
+      <div class="hint">Input + output tokens combined. 0 = unlimited</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeRLModal()">Cancel</button>
+      <button class="btn on" onclick="saveRLModal()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="chart-tip" id="chart-tip"></div>
 
 <script>
 let autoRefresh = true, timer, filters = {};
+let currentTab = 'logs';
+
+// ---- Tab switching ----
+function switchMainTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.top-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-content').forEach(el => {
+    el.classList.toggle('active', el.id === 'tab-' + tab);
+  });
+  if (tab === 'charts' && !chartLoaded) loadCharts();
+  if (tab === 'settings') { loadTokenData(); loadApiKeys(); }
+}
 
 function toggleAuto() {
   autoRefresh = !autoRefresh;
@@ -640,6 +961,7 @@ function applyFilter() {
   filters.from = document.getElementById('f-from').value || undefined;
   filters.to = document.getElementById('f-to').value || undefined;
   filters.model = document.getElementById('f-model').value || undefined;
+  filters.token_name = document.getElementById('f-token').value || undefined;
   refresh();
 }
 
@@ -648,6 +970,7 @@ function clearFilter() {
   document.getElementById('f-from').value = '';
   document.getElementById('f-to').value = '';
   document.getElementById('f-model').value = '';
+  document.getElementById('f-token').value = '';
   refresh();
 }
 
@@ -662,6 +985,7 @@ async function refresh() {
   if (filters.from) params.set('from', filters.from.replace('T', ' '));
   if (filters.to) params.set('to', filters.to.replace('T', ' '));
   if (filters.model) params.set('model', filters.model);
+  if (filters.token_name) params.set('token_name', filters.token_name);
   params.set('limit', '200');
 
   const errorsOnly = document.getElementById('show-errors').checked;
@@ -697,7 +1021,7 @@ async function refresh() {
   const tbody = document.getElementById('log-body');
 
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="7">
+    tbody.innerHTML = `<tr><td colspan="9">
       <div class="empty-wrap">
         <div class="empty-ring"></div>
         <div class="empty-text">No requests yet</div>
@@ -720,6 +1044,8 @@ async function refresh() {
 
     let rows = `<tr onclick="openDetail(${l.id})">
       <td class="c-ts">${l.ts || ''}</td>
+      <td class="c-token">${esc(l.token_name || '-')}</td>
+      <td class="c-token">${esc(l.api_key_name || '-')}</td>
       <td class="c-model">${esc(l.model || '-')}</td>
       <td><span class="c-status ${sc}">${l.status}</span></td>
       <td class="c-dur">${l.duration_ms ? l.duration_ms + 'ms' : '-'}</td>
@@ -743,7 +1069,6 @@ async function openDetail(id) {
   overlay.classList.add('open');
   document.getElementById('drawer-title').textContent = `Request #${id}`;
 
-  // Fetch full detail
   let detail = drawerCache[id];
   if (!detail) {
     const r = await fetch(`/api/logs/${id}`);
@@ -775,6 +1100,7 @@ async function openDetail(id) {
         <div class="drawer-meta">
           <span class="drawer-meta-k">Time</span><span class="drawer-meta-v">${esc(detail.ts)}</span>
           <span class="drawer-meta-k">Model</span><span class="drawer-meta-v">${esc(detail.model||'-')}</span>
+          <span class="drawer-meta-k">Token</span><span class="drawer-meta-v">${esc(detail.token_name||'-')}</span>
           <span class="drawer-meta-k">Status</span><span class="drawer-meta-v">${detail.status}</span>
           <span class="drawer-meta-k">Duration</span><span class="drawer-meta-v">${detail.duration_ms}ms</span>
           <span class="drawer-meta-k">Type</span><span class="drawer-meta-v">${detail.stream?'SSE Stream':'Sync'}</span>
@@ -812,8 +1138,13 @@ function closeDrawer(e) {
   document.getElementById('drawer-overlay').classList.remove('open');
 }
 
-// ESC to close
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+// ESC to close drawer or modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (document.getElementById('rl-modal').classList.contains('open')) closeRLModal();
+    else closeDrawer();
+  }
+});
 
 function renderSSE(raw) {
   if (!raw) return '<span style="color:var(--text-4)">No SSE data</span>';
@@ -838,7 +1169,6 @@ function renderSSE(raw) {
 
   if (!events.length) return `<pre>${esc(raw.slice(0, 5000))}</pre>`;
 
-  // Group content_block_delta events to avoid flooding
   let html = `<div style="margin-bottom:12px;color:var(--text-4);font-size:11px">${events.length} SSE events</div>`;
 
   let deltaBuffer = [];
@@ -856,7 +1186,7 @@ function renderSSE(raw) {
     deltaBuffer = [];
     const combined = texts.join('');
     return `<div class="sse-event evt-content_block_delta">
-      <div class="sse-type">content_block_delta × ${count}</div>
+      <div class="sse-type">content_block_delta x ${count}</div>
       <div class="sse-data">${esc(combined.slice(0, 2000))}${combined.length > 2000 ? '...' : ''}</div>
     </div>`;
   }
@@ -935,7 +1265,6 @@ function drawHourlyChart(data) {
   hourlyHits = [];
   ctx.clearRect(0, 0, totalW, h);
 
-  // --- date header bands ---
   const daySpans = [];
   let curDay = '', spanStart = 0;
   data.forEach((d, i) => {
@@ -949,11 +1278,9 @@ function drawHourlyChart(data) {
 
   const dayColors = ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.04)'];
   daySpans.forEach((span, si) => {
-    // alternate bg for readability
     ctx.fillStyle = dayColors[si % 2];
     ctx.fillRect(span.x1, 0, span.x2 - span.x1, h);
 
-    // date label
     const weekday = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(span.day + 'T12:00:00').getDay()];
     const label = `${span.day.slice(5)}  ${weekday}`;
     const cx = (span.x1 + span.x2) / 2;
@@ -962,7 +1289,6 @@ function drawHourlyChart(data) {
     ctx.textAlign = 'center';
     ctx.fillText(label, cx, 14);
 
-    // separator line
     if (si > 0) {
       ctx.strokeStyle = 'rgba(113,112,255,0.2)'; ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
@@ -971,7 +1297,6 @@ function drawHourlyChart(data) {
     }
   });
 
-  // grid
   for (let i = 0; i <= 2; i++) {
     const y = pad.t + ch * (1 - i / 2);
     ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1;
@@ -993,7 +1318,6 @@ function drawHourlyChart(data) {
       ctx.beginPath(); ctx.roundRect(x - BAR_W / 2, barY, BAR_W, errH, [2, 2, 0, 0]); ctx.fill();
     }
 
-    // hour labels every 3h
     const hour = d.slot.slice(11, 13);
     if (parseInt(hour) % 3 === 0) {
       ctx.font = '9px Inter, system-ui'; ctx.textAlign = 'center';
@@ -1004,11 +1328,10 @@ function drawHourlyChart(data) {
     hourlyHits.push({ x: i * slotW, x2: (i + 1) * slotW, d });
   });
 
-  // scroll to end (latest)
   scroll.scrollLeft = totalW;
 }
 
-// --- drag to scroll ---
+// drag to scroll
 (function() {
   const el = document.getElementById('chart-scroll');
   let isDrag = false, startX = 0, startScroll = 0;
@@ -1064,7 +1387,6 @@ async function loadCharts() {
     const r = await fetch('/api/stats/charts');
     const { hourly, modelShare } = await r.json();
 
-    // fill all 24h per day
     if (hourly.length) {
       const map = new Map(hourly.map(h => [h.slot, h]));
       const firstDay = hourly[0].slot.slice(0, 10);
@@ -1091,18 +1413,294 @@ async function loadCharts() {
   } catch (e) { console.warn('chart load failed', e); }
 }
 
-// Refresh charts on window resize
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => { if (chartLoaded) loadCharts(); }, 200);
 });
 
+// ---- Token Management ----
+let tokenData = [];
+
+async function loadTokenData() {
+  try {
+    const r = await fetch('/api/tokens');
+    tokenData = await r.json();
+    renderTokenSection();
+    updateTokenFilter();
+    // Populate token dropdowns
+    const selectors = [document.getElementById('add-key-token'), document.getElementById('rl-modal-token')];
+    for (const sel of selectors) {
+      if (!sel) continue;
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">Default (active)</option>' +
+        tokenData.map(t => `<option value="${esc(t.name)}">${esc(t.name)}${t.active ? ' *' : ''}</option>`).join('');
+      sel.value = prev;
+    }
+  } catch (e) { console.warn('token load failed', e); }
+}
+
+function tokenTypeClass(type) {
+  return 'type-' + (type || 'unknown').replace(/_$/, '');
+}
+
+function renderTokenSection() {
+  const activeInfo = document.getElementById('active-token-info');
+  const list = document.getElementById('token-list');
+
+  const active = tokenData.find(t => t.active);
+  if (active) {
+    activeInfo.innerHTML = `
+      <div class="token-active-badge">
+        <div class="token-active-dot"></div>
+        ${esc(active.name)}
+      </div>
+      <div class="token-active-meta">
+        <span><span class="label">User</span><span class="val">${esc(active.username || 'unknown')}</span></span>
+        <span><span class="label">Type</span><span class="token-chip ${tokenTypeClass(active.type)}">${esc(active.type)}</span></span>
+        <span><span class="label">Token</span><span class="val">${esc(active.masked)}</span></span>
+      </div>
+    `;
+  } else {
+    activeInfo.innerHTML = '<span style="color:var(--text-4)">No token configured</span>';
+  }
+
+  list.innerHTML = tokenData.map(t => {
+    const tcls = tokenTypeClass(t.type);
+    const safeName = esc(t.name).replace(/'/g, "\\'");
+    return `<div class="token-list-item${t.active ? ' active' : ''}">
+      <input type="radio" class="token-radio" name="active-token" ${t.active ? 'checked' : ''}
+             onchange="activateToken('${safeName}')" ${t.isEnv ? 'disabled' : ''}>
+      <div class="token-info">
+        <span class="token-name">${esc(t.name)}</span>
+        <span class="token-detail">
+          <span class="token-chip ${tcls}">${esc(t.type)}</span>
+          ${esc(t.masked)} ${t.username ? '&middot; ' + esc(t.username) : ''}
+        </span>
+      </div>
+      <div class="token-actions">
+        <button class="btn" onclick="testToken('${safeName}')" style="padding:3px 8px;font-size:10px">Test</button>
+        ${!t.isEnv ? `<button class="btn" onclick="deleteToken('${safeName}')" style="padding:3px 8px;font-size:10px;color:var(--red)">Del</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function updateTokenFilter() {
+  const sel = document.getElementById('f-token');
+  const cur = sel.value;
+  const names = [...new Set(tokenData.map(t => t.name))];
+  sel.innerHTML = '<option value="">All tokens</option>' +
+    names.map(n => `<option value="${esc(n)}"${cur === n ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+
+async function activateToken(name) {
+  try {
+    await fetch(`/api/tokens/${encodeURIComponent(name)}/activate`, { method: 'PUT' });
+    await loadTokenData();
+  } catch (e) { alert('Failed to activate token: ' + e.message); }
+}
+
+async function addToken() {
+  const nameEl = document.getElementById('add-token-name');
+  const valEl = document.getElementById('add-token-value');
+  const name = nameEl.value.trim();
+  const token = valEl.value.trim();
+  if (!name || !token) { alert('Name and token are required'); return; }
+  try {
+    const r = await fetch('/api/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, token })
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Failed to add token'); return; }
+    nameEl.value = '';
+    valEl.value = '';
+    await loadTokenData();
+  } catch (e) { alert('Failed to add token: ' + e.message); }
+}
+
+async function deleteToken(name) {
+  if (!confirm(`Delete token "${name}"?`)) return;
+  try {
+    await fetch(`/api/tokens/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await loadTokenData();
+  } catch (e) { alert('Failed to delete token: ' + e.message); }
+}
+
+async function testToken(name) {
+  const btn = event.target;
+  const orig = btn.textContent;
+  btn.textContent = '...';
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/tokens/${encodeURIComponent(name)}/test`);
+    const data = await r.json();
+    alert(`Token: ${name}\nCopilot Exchange: ${data.success ? 'OK' : 'FAILED'}\nUsername: ${data.username || 'N/A'}\nEndpoint: ${data.endpointType}\nType: ${data.type}`);
+    await loadTokenData();
+  } catch (e) { alert('Test failed: ' + e.message); }
+  btn.textContent = orig;
+  btn.disabled = false;
+}
+
+// ── API Key Management ──
+let apiKeyData = [];
+
+function renderUsageBar(label, used, limit) {
+  if (!limit || limit === 0) return '';
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  const cls = pct > 95 ? 'crit' : pct > 80 ? 'warn' : '';
+  return `<div class="rl-bar-wrap">
+    <span class="rl-bar-label">${label}</span>
+    <div class="rl-bar-track"><div class="rl-bar-fill ${cls}" style="width:${pct}%"></div></div>
+    <span class="rl-bar-val">${fmt(used)} / ${fmt(limit)}</span>
+  </div>`;
+}
+
+async function loadApiKeys() {
+  try {
+    const r = await fetch('/api/keys');
+    apiKeyData = await r.json();
+    const list = document.getElementById('apikey-list');
+    if (!apiKeyData.length) {
+      list.innerHTML = '<div style="color:var(--text-4);font-size:11px;padding:6px 0">No API keys configured — all requests are allowed without authentication.</div>';
+      return;
+    }
+    list.innerHTML = apiKeyData.map(k => {
+      const safeName = esc(k.name).replace(/'/g, "\\'");
+      const tokenBind = k.token_name ? `<span style="color:var(--accent-bright)">@ ${esc(k.token_name)}</span>` : '<span style="color:var(--text-4)">default</span>';
+      const rl = k.rate_limit || {};
+      const usage = k.usage || { rpm: {used:0,limit:0}, rpd: {used:0,limit:0}, tpm: {used:0,limit:0} };
+
+      let rlInfo = '';
+      if (rl.rpm || rl.rpd || rl.tpm) {
+        const parts = [];
+        if (rl.rpm) parts.push(`${rl.rpm} RPM`);
+        if (rl.rpd) parts.push(`${rl.rpd} RPD`);
+        if (rl.tpm) parts.push(`${fmt(rl.tpm)} TPM`);
+        rlInfo = `<span style="color:var(--amber);font-size:10px">${parts.join(' / ')}</span>`;
+      } else {
+        rlInfo = '<span style="color:var(--text-4);font-size:10px">No limits</span>';
+      }
+
+      const usageBars = renderUsageBar('RPM', usage.rpm.used, usage.rpm.limit)
+        + renderUsageBar('RPD', usage.rpd.used, usage.rpd.limit)
+        + renderUsageBar('TPM', usage.tpm.used, usage.tpm.limit);
+
+      return `<div class="token-list-item" style="flex-wrap:wrap">
+        <div class="token-info" style="min-width:200px">
+          <span class="token-name">${esc(k.name)}</span>
+          <span class="token-detail">${esc(k.masked)} &middot; ${tokenBind} &middot; ${rlInfo}</span>
+          ${usageBars ? `<div style="margin-top:4px;width:100%">${usageBars}</div>` : ''}
+        </div>
+        <div class="token-actions">
+          <button class="btn" onclick="openRLModal('${safeName}')" style="padding:3px 8px;font-size:10px">Edit</button>
+          <button class="btn" onclick="copyApiKey('${safeName}')" style="padding:3px 8px;font-size:10px">Copy</button>
+          <button class="btn" onclick="deleteApiKey('${safeName}')" style="padding:3px 8px;font-size:10px;color:var(--red)">Del</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) { console.error('Failed to load API keys:', e); }
+}
+
+async function addApiKey() {
+  const nameEl = document.getElementById('add-key-name');
+  const tokenEl = document.getElementById('add-key-token');
+  const name = nameEl.value.trim();
+  if (!name) { alert('Please enter an API key name'); return; }
+  const payload = {
+    name,
+    rate_limit: {
+      rpm: parseInt(document.getElementById('add-key-rpm').value) || 0,
+      rpd: parseInt(document.getElementById('add-key-rpd').value) || 0,
+      tpm: parseInt(document.getElementById('add-key-tpm').value) || 0,
+    }
+  };
+  if (tokenEl.value) payload.token_name = tokenEl.value;
+  try {
+    const r = await fetch('/api/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Failed to create key'); return; }
+    nameEl.value = '';
+    tokenEl.value = '';
+    document.getElementById('add-key-rpm').value = '0';
+    document.getElementById('add-key-rpd').value = '0';
+    document.getElementById('add-key-tpm').value = '0';
+    const copyOk = await navigator.clipboard.writeText(data.key).then(() => true).catch(() => false);
+    alert(`API Key created!\n\nName: ${data.name}\nKey: ${data.key}\n\n${copyOk ? 'Copied to clipboard!' : 'Please copy it now — it won\'t be shown again.'}`);
+    await loadApiKeys();
+  } catch (e) { alert('Failed to create key: ' + e.message); }
+}
+
+async function deleteApiKey(name) {
+  if (!confirm(`Delete API key "${name}"?`)) return;
+  try {
+    await fetch(`/api/keys/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await loadApiKeys();
+  } catch (e) { alert('Failed to delete key: ' + e.message); }
+}
+
+async function copyApiKey(name) {
+  try {
+    await navigator.clipboard.writeText(name);
+    alert(`Key name "${name}" copied. Note: for security, the full key is only shown once at creation.`);
+  } catch { alert('Copy failed'); }
+}
+
+// ── Rate Limit Modal ──
+function openRLModal(keyName) {
+  const k = apiKeyData.find(k => k.name === keyName);
+  if (!k) return;
+  const rl = k.rate_limit || {};
+  document.getElementById('rl-modal-key').value = keyName;
+  document.getElementById('rl-modal-title').textContent = `Edit: ${keyName}`;
+  document.getElementById('rl-modal-rpm').value = rl.rpm || 0;
+  document.getElementById('rl-modal-rpd').value = rl.rpd || 0;
+  document.getElementById('rl-modal-tpm').value = rl.tpm || 0;
+  document.getElementById('rl-modal-token').value = k.token_name || '';
+  document.getElementById('rl-modal').classList.add('open');
+}
+
+function closeRLModal() {
+  document.getElementById('rl-modal').classList.remove('open');
+}
+
+async function saveRLModal() {
+  const keyName = document.getElementById('rl-modal-key').value;
+  const payload = {
+    rate_limit: {
+      rpm: parseInt(document.getElementById('rl-modal-rpm').value) || 0,
+      rpd: parseInt(document.getElementById('rl-modal-rpd').value) || 0,
+      tpm: parseInt(document.getElementById('rl-modal-tpm').value) || 0,
+    },
+    token_name: document.getElementById('rl-modal-token').value || null,
+  };
+  try {
+    const r = await fetch(`/api/keys/${encodeURIComponent(keyName)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) { const d = await r.json(); alert(d.error || 'Failed'); return; }
+    closeRLModal();
+    await loadApiKeys();
+  } catch (e) { alert('Failed: ' + e.message); }
+}
+
+// ---- Init ----
 refresh();
-loadCharts();
+loadTokenData();
+loadApiKeys();
 startTimer();
-// reload charts every 30s
-setInterval(loadCharts, 30000);
+// reload charts when visible, and periodically
+setInterval(() => { if (currentTab === 'charts') loadCharts(); }, 30000);
+// Also refresh API key usage on settings tab
+setInterval(() => { if (currentTab === 'settings') loadApiKeys(); }, 5000);
 </script>
 </body>
 </html>

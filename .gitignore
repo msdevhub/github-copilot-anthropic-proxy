@@ -1,2 +1,2 @@
 *.log
-*-logs.db
+*-logs.dbapi-keys.json\ntokens.json
