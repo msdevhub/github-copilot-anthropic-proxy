@@ -11,6 +11,24 @@
 </head>
 <body>
 
+<!-- Loading screen (shown while checking auth) -->
+<div id="loading-screen" class="auth-loading">
+  <div class="auth-loading-spinner"></div>
+</div>
+
+<!-- Login screen (shown when not authenticated) -->
+<div id="login-screen" class="auth-login" style="display:none">
+  <div class="auth-card">
+    <div class="hdr-mark" style="width:32px;height:32px;border-radius:8px;margin-bottom:16px"></div>
+    <h1 class="auth-title">Copilot Proxy</h1>
+    <p class="auth-sub">Sign in to access the dashboard.</p>
+    <button class="auth-btn" onclick="signIn()">Sign in with Logto</button>
+  </div>
+</div>
+
+<!-- Dashboard (hidden until authenticated) -->
+<div id="app" style="display:none">
+
 <header class="hdr">
   <div class="hdr-left">
     <div class="hdr-mark"></div>
@@ -23,6 +41,9 @@
     <span class="hdr-tz">CST</span>
     <button class="btn" onclick="refresh()">Refresh</button>
     <button class="btn on" onclick="toggleAuto()" id="btn-auto">Live</button>
+    <div class="hdr-sep"></div>
+    <span class="hdr-user" id="hdr-user"></span>
+    <button class="btn" onclick="signOut()" id="btn-logout">Logout</button>
   </div>
 </header>
 
@@ -63,35 +84,39 @@
     <div class="models" id="model-stats"></div>
 
     <div class="bar">
-      <div class="bar-sep"></div>
-      <input type="datetime-local" id="f-from" step="1">
-      <span style="color:var(--text-4);font-size:11px">~</span>
-      <input type="datetime-local" id="f-to" step="1">
-      <select id="f-model"><option value="">All models</option></select>
-      <select id="f-token"><option value="">All tokens</option></select>
-      <button class="btn" onclick="applyFilter()">Filter</button>
-      <button class="btn" onclick="clearFilter()">Reset</button>
-      <div class="bar-sep"></div>
-      <label><input type="checkbox" id="show-errors" onchange="refresh()"> Errors only</label>
-      <label><input type="checkbox" id="show-body" onchange="refresh()"> Body</label>
+      <div class="bar-row-1">
+        <input type="datetime-local" id="f-from" step="1">
+        <span style="color:var(--text-4);font-size:11px">~</span>
+        <input type="datetime-local" id="f-to" step="1">
+        <select id="f-model"><option value="">All models</option></select>
+        <select id="f-token"><option value="">All tokens</option></select>
+        <button class="btn" onclick="applyFilter()">Filter</button>
+        <button class="btn" onclick="clearFilter()">Reset</button>
+      </div>
+      <div class="bar-row-2">
+        <label><input type="checkbox" id="show-errors" onchange="refresh()"> Errors only</label>
+        <label><input type="checkbox" id="show-body" onchange="refresh()"> Body</label>
+      </div>
     </div>
 
-    <table class="tbl">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Token</th>
-          <th>API Key</th>
-          <th>Model</th>
-          <th>Status</th>
-          <th>Latency</th>
-          <th>Tokens</th>
-          <th>Type</th>
-          <th style="width:100%">Preview</th>
-        </tr>
-      </thead>
-      <tbody id="log-body"></tbody>
-    </table>
+    <div class="tbl-container">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Token</th>
+            <th>API Key</th>
+            <th>Model</th>
+            <th>Status</th>
+            <th>Latency</th>
+            <th>Tokens</th>
+            <th>Type</th>
+            <th style="width:100%">Preview</th>
+          </tr>
+        </thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
 
   </div>
 
@@ -113,6 +138,8 @@
             <input type="text" class="token-input" id="add-token-name" placeholder="Name">
             <input type="text" class="token-input token-input-wide" id="add-token-value" placeholder="GitHub token (gho_..., github_pat_...)">
             <button class="btn" onclick="addToken()">Add</button>
+            <span style="color:var(--text-4);font-size:11px">or</span>
+            <button class="btn on" onclick="openDeviceModal()">Device Login</button>
           </div>
         </div>
       </div>
@@ -224,6 +251,118 @@
 
 <div class="chart-tip" id="chart-tip"></div>
 
-<script src="/dashboard.js"></script>
+<!-- Device Login Modal -->
+<div class="modal-overlay" id="device-modal" onclick="if(event.target===this)closeDeviceModal()">
+  <div class="modal-box" style="width:400px">
+    <div class="modal-title">Device Login</div>
+    <div id="device-step-start">
+      <div class="modal-field">
+        <label>Token Name (optional)</label>
+        <input type="text" id="device-token-name" placeholder="e.g. my-github">
+        <div class="hint">Leave empty to auto-name as 'device-&lt;username&gt;'</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeDeviceModal()">Cancel</button>
+        <button class="btn on" onclick="startDeviceLogin()">Start Login</button>
+      </div>
+    </div>
+    <div id="device-step-code" style="display:none">
+      <div style="text-align:center;margin-bottom:16px">
+        <div style="font-size:11px;color:var(--text-4);margin-bottom:8px">Enter this code at GitHub:</div>
+        <div id="device-user-code" class="device-code"></div>
+        <button class="btn" onclick="copyDeviceCode()" id="device-copy-btn" style="margin-top:8px">Copy Code</button>
+      </div>
+      <div style="text-align:center;margin-bottom:16px">
+        <a id="device-verify-link" href="https://github.com/login/device" target="_blank" rel="noopener" class="device-link">Open GitHub Device Page &rarr;</a>
+      </div>
+      <div id="device-status" class="device-status">
+        <div class="device-spinner"></div>
+        <span>Waiting for authorization...</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeDeviceModal()">Cancel</button>
+      </div>
+    </div>
+    <div id="device-step-done" style="display:none">
+      <div style="text-align:center;padding:16px 0">
+        <div style="color:var(--green);font-size:16px;font-weight:600;margin-bottom:8px">Login Successful!</div>
+        <div style="font-size:12px;color:var(--text-2)">Token saved as <strong id="device-done-name"></strong></div>
+        <div style="font-size:11px;color:var(--text-4);margin-top:4px">GitHub user: <span id="device-done-user"></span></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn on" onclick="closeDeviceModal()">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- end #app -->
+
+<!-- Logto Browser SDK -->
+<script type="module">
+import LogtoClient from 'https://esm.sh/@logto/browser';
+
+const logtoClient = new LogtoClient({
+  endpoint: 'https://logto.dr.restry.cn',
+  appId: 'o56bvf8eszd31vthks7i3',
+});
+
+window._logtoClient = logtoClient;
+
+async function initAuth() {
+  const loadingEl = document.getElementById('loading-screen');
+  const loginEl = document.getElementById('login-screen');
+  const appEl = document.getElementById('app');
+
+  try {
+    // Handle callback from Logto
+    if (window.location.pathname === '/callback') {
+      await logtoClient.handleSignInCallback(window.location.href);
+      window.location.replace('/');
+      return;
+    }
+
+    const isAuth = await logtoClient.isAuthenticated();
+
+    if (isAuth) {
+      // Create server-side session cookie
+      await fetch('/api/__auth/session', { method: 'POST', credentials: 'same-origin' });
+
+      // Get user info and show dashboard
+      const claims = await logtoClient.getIdTokenClaims();
+      const userName = claims.name || claims.email || claims.username || claims.sub;
+      document.getElementById('hdr-user').textContent = userName;
+
+      loadingEl.style.display = 'none';
+      appEl.style.display = '';
+
+      // Load dashboard JS
+      const script = document.createElement('script');
+      script.src = '/dashboard.js';
+      document.body.appendChild(script);
+    } else {
+      // Show login screen
+      loadingEl.style.display = 'none';
+      loginEl.style.display = '';
+    }
+  } catch (err) {
+    console.error('Auth init error:', err);
+    // On error, show login screen
+    loadingEl.style.display = 'none';
+    loginEl.style.display = '';
+  }
+}
+
+window.signIn = () => {
+  logtoClient.signIn(window.location.origin + '/callback');
+};
+
+window.signOut = async () => {
+  await fetch('/api/__auth/session', { method: 'DELETE', credentials: 'same-origin' });
+  logtoClient.signOut(window.location.origin);
+};
+
+initAuth();
+</script>
 </body>
 </html>

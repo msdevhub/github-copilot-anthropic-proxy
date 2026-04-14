@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_PATH, __DIR, fullError } from "./lib/utils.mjs";
 import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
-import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken } from "./lib/tokens.mjs";
-import { checkApiKey, checkDashboardAuth, handleLoginPost, loginPageHTML, DASHBOARD_PASSWORD } from "./lib/auth.mjs";
+import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
+import { checkApiKey, checkDashboardSession, createDashboardSession, destroyDashboardSession } from "./lib/auth.mjs";
 import { db, addLog } from "./lib/database.mjs";
 
 // ─── CLI: --add-key <name> ───────────────────────────────────────────────────
@@ -27,6 +27,13 @@ if (addKeyIdx !== -1) {
   process.exit(0);
 }
 
+// ─── In-flight request tracking & graceful shutdown ──────────────────────────
+let inFlightCount = 0;
+let isShuttingDown = false;
+
+// ── In-memory store for device login sessions ───────────────────────────────
+const deviceLoginSessions = new Map();
+
 // --- Dashboard HTML ---
 function dashboardHTML() {
   const html = readFileSync(DASHBOARD_PATH, "utf8");
@@ -40,32 +47,52 @@ const REQUIRED_HEADERS = {
   "Openai-Intent": "conversation-edits",
 };
 
+// ─── Retry config (non-streaming only) ───────────────────────────────────────
+const RETRY_DELAYS = [1000, 3000];
+const RETRYABLE_STATUSES = new Set([429, 502, 503]);
+const RETRYABLE_ERROR_CODES = new Set(['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET']);
+
 async function handleRequest(req, res) {
   // Skip WebSocket upgrade requests — handled by server.on("upgrade")
   if (req.headers.upgrade && req.headers.upgrade.toLowerCase() === 'websocket') return;
+
+  // ── Graceful shutdown: reject new requests with 503 ───────────────────────
+  if (isShuttingDown) {
+    res.writeHead(503, { "Content-Type": "application/json", "Connection": "close" });
+    res.end(JSON.stringify({ error: "Server is shutting down" }));
+    return;
+  }
+
+  // Track in-flight requests for graceful shutdown
+  inFlightCount++;
+  res.on('close', () => { inFlightCount--; });
 
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, anthropic-version, x-api-key");
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
-  // ── Login form POST ────────────────────────────────────────────────────────
-  if (req.method === "POST" && req.url === "/__login") {
-    await handleLoginPost(req, res);
+  // ── Health check (no auth required) ─────────────────────────────────────────
+  if (req.method === "GET" && req.url === "/health") {
+    const stats = db.prepare("SELECT COUNT(*) as total_requests, SUM(CASE WHEN status >= 400 OR error IS NOT NULL THEN 1 ELSE 0 END) as error_count FROM logs").get();
+    const lastErrorRow = db.prepare("SELECT error, ts FROM logs WHERE error IS NOT NULL ORDER BY id DESC LIMIT 1").get();
+    const tokenInfo = getCachedTokenInfo();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      status: tokenInfo.expiry_status === 'expired' ? 'degraded' : 'ok',
+      uptime_seconds: Math.floor(process.uptime()),
+      active_token: tokenInfo.name,
+      token_expiry: tokenInfo.expiry_status,
+      total_requests: stats.total_requests || 0,
+      error_count: stats.error_count || 0,
+      last_error: lastErrorRow ? { message: lastErrorRow.error, ts: lastErrorRow.ts } : null,
+    }));
     return;
   }
 
-  // ── Dashboard password gate (GET / and /api/*) ─────────────────────────────
-  const isDashboardRoute = (req.method === "GET" && (req.url === "/" || req.url === "/index.html"))
-    || req.url.startsWith("/api/");
-  if (isDashboardRoute && !checkDashboardAuth(req)) {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(loginPageHTML());
-    return;
-  }
-
-  // Dashboard
-  if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
+  // Dashboard (serves same HTML for / and /callback — SPA auth handled client-side)
+  const pathname = req.url.split("?")[0];
+  if (req.method === "GET" && (pathname === "/" || pathname === "/index.html" || pathname === "/callback")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(dashboardHTML());
     return;
@@ -84,6 +111,33 @@ async function handleRequest(req, res) {
       res.end("Not found");
     }
     return;
+  }
+
+  // ── Dashboard session management ──────────────────────────────────────────
+  // POST /api/__auth/session — create a session cookie (called by client after Logto auth)
+  if (req.method === "POST" && req.url === "/api/__auth/session") {
+    const { token, headers } = createDashboardSession();
+    res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `dash_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400` });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // DELETE /api/__auth/session — destroy session (logout)
+  if (req.method === "DELETE" && req.url === "/api/__auth/session") {
+    destroyDashboardSession(req);
+    res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": "dash_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── Dashboard API auth guard ──────────────────────────────────────────────
+  // All /api/ routes below require a valid dashboard session (except proxy API key routes)
+  if (req.url.startsWith("/api/") && !req.url.startsWith("/api/__auth/")) {
+    if (!checkDashboardSession(req)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized — please sign in" }));
+      return;
+    }
   }
 
   // Charts API
@@ -271,6 +325,134 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // ── Device Login (GitHub OAuth Device Flow) ────────────────────────────────
+  if (req.method === "POST" && req.url === "/api/device-login/start") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    let parsed = {};
+    try { parsed = JSON.parse(Buffer.concat(chunks).toString()); } catch {}
+    const tokenName = parsed.token_name || '';
+    try {
+      const ghRes = await fetch("https://github.com/login/device/code", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: "Iv1.b507a08c87ecfe98", scope: "read:user" }),
+      });
+      if (!ghRes.ok) {
+        const errText = await ghRes.text();
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `GitHub API error: ${ghRes.status} ${errText}` }));
+        return;
+      }
+      const data = await ghRes.json();
+      const sessionId = randomBytes(16).toString("hex");
+      deviceLoginSessions.set(sessionId, {
+        device_code: data.device_code,
+        interval: data.interval || 5,
+        expires_at: Date.now() + (data.expires_in || 900) * 1000,
+        token_name: tokenName,
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        session_id: sessionId,
+        user_code: data.user_code,
+        verification_uri: data.verification_uri,
+        expires_in: data.expires_in,
+      }));
+    } catch (err) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `Failed to start device flow: ${err.message}` }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/device-login/poll") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    let parsed;
+    try { parsed = JSON.parse(Buffer.concat(chunks).toString()); } catch {
+      res.writeHead(400, { "Content-Type": "application/json" }); res.end('{"error":"invalid JSON"}'); return;
+    }
+    const { session_id } = parsed;
+    const session = deviceLoginSessions.get(session_id);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "Session not found or expired" }));
+      return;
+    }
+    if (Date.now() > session.expires_at) {
+      deviceLoginSessions.delete(session_id);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "expired" }));
+      return;
+    }
+    try {
+      const ghRes = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: "Iv1.b507a08c87ecfe98",
+          device_code: session.device_code,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+      });
+      const data = await ghRes.json();
+      if (data.error === "authorization_pending") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "pending" }));
+        return;
+      }
+      if (data.error === "slow_down") {
+        session.interval = (session.interval || 5) + 5;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "pending", interval: session.interval }));
+        return;
+      }
+      if (data.error === "expired_token") {
+        deviceLoginSessions.delete(session_id);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "expired" }));
+        return;
+      }
+      if (data.error) {
+        deviceLoginSessions.delete(session_id);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "error", error: data.error }));
+        return;
+      }
+      // Success — we have an access_token
+      if (data.access_token) {
+        let username = null;
+        try {
+          const userRes = await fetch("https://api.github.com/user", {
+            headers: { Authorization: `token ${data.access_token}`, Accept: "application/json", "User-Agent": "copilot-proxy" },
+          });
+          if (userRes.ok) { const u = await userRes.json(); username = u.login; }
+        } catch {}
+        const name = session.token_name || `device-${username || 'user'}`;
+        const tokens = loadTokens();
+        let finalName = name;
+        let suffix = 1;
+        while (tokens.find(t => t.name === finalName)) { finalName = `${name}-${suffix++}`; }
+        const isFirst = tokens.length === 0;
+        tokens.push({ name: finalName, token: data.access_token, active: isFirst, username });
+        saveTokens(tokens);
+        if (isFirst) clearCachedToken();
+        deviceLoginSessions.delete(session_id);
+        console.log(`🔑 Device login: token saved as "${finalName}" (user: ${username || 'unknown'})`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "complete", token_name: finalName, username }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "Unexpected response from GitHub" }));
+    } catch (err) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: `Poll failed: ${err.message}` }));
+    }
+    return;
+  }
+
   // ── API Key management API ─────────────────────────────────────────────────
   if (req.method === "GET" && req.url === "/api/keys") {
     const keys = loadApiKeys();
@@ -383,6 +565,20 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // GET /v1/models — return supported models list (needed by Claude Code)
+  if (req.method === "GET" && req.url.startsWith("/v1/models")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      data: [
+        { id: "claude-sonnet-4-20250514", display_name: "Claude Sonnet 4", created_at: "2025-05-14" },
+        { id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4", created_at: "2025-05-14" },
+        { id: "claude-haiku-3-5-20241022", display_name: "Claude 3.5 Haiku", created_at: "2024-10-22" },
+        { id: "claude-opus-4-20250514", display_name: "Claude Opus 4", created_at: "2025-05-14" },
+      ]
+    }));
+    return;
+  }
+
   // Only handle POST /v1/messages
   if (req.method !== "POST" || !req.url.startsWith("/v1/messages")) {
     res.writeHead(404, { "Content-Type": "application/json" });
@@ -445,6 +641,12 @@ async function handleRequest(req, res) {
     if (parsed) {
       // Default max_tokens to 5000 if not provided
       if (!parsed.max_tokens) parsed.max_tokens = 5000;
+
+      // Remap claude-opus-4.6 variants to the 1M context version
+      if (parsed.model && /^claude-opus-4[.\-]6/i.test(parsed.model) && parsed.model !== 'claude-opus-4.6-1m') {
+        console.log(`🔄 Model remapped: ${parsed.model} → claude-opus-4.6-1m`);
+        parsed.model = 'claude-opus-4.6-1m';
+      }
 
       logEntry.model = parsed.model || null;
       logEntry.stream = !!parsed.stream;
@@ -690,13 +892,12 @@ server.on("upgrade", (req, socket) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   const apiKeysConfigured = loadApiKeys().length;
-  const dashPwSet = !!DASHBOARD_PASSWORD;
   console.log(`🍟 Copilot→Anthropic proxy running at http://127.0.0.1:${PORT}`);
   console.log(`   API:       POST http://127.0.0.1:${PORT}/v1/messages`);
   console.log(`   Dashboard: http://127.0.0.1:${PORT}/`);
   console.log(`   DB:        ${DB_PATH}`);
   console.log(`   API keys:  ${apiKeysConfigured ? `${apiKeysConfigured} key(s) configured (${API_KEYS_PATH})` : "none — all requests allowed (add keys with --add-key)"}`);
-  console.log(`   Dash auth: ${dashPwSet ? "password-protected (DASHBOARD_PASSWORD is set)" : "open (set DASHBOARD_PASSWORD to protect)"}`);
+  console.log(`   Dash auth: Logto SSO (${process.env.LOGTO_ENDPOINT || 'https://logto.dr.restry.cn'})`);
   // Log active token info
   const { token: activeGH, name: activeTokenName } = getActiveGitHubToken();
   if (activeGH) {

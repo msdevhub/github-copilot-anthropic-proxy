@@ -211,7 +211,8 @@ function closeDrawer(e) {
 // ESC to close drawer or modal
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (document.getElementById('rl-modal').classList.contains('open')) closeRLModal();
+    if (document.getElementById('device-modal').classList.contains('open')) closeDeviceModal();
+    else if (document.getElementById('rl-modal').classList.contains('open')) closeRLModal();
     else closeDrawer();
   }
 });
@@ -761,6 +762,97 @@ async function saveRLModal() {
   } catch (e) { alert('Failed: ' + e.message); }
 }
 
+// ── Device Login (GitHub OAuth Device Flow) ──
+let deviceSessionId = null;
+let devicePollTimer = null;
+
+function openDeviceModal() {
+  document.getElementById('device-token-name').value = '';
+  document.getElementById('device-step-start').style.display = '';
+  document.getElementById('device-step-code').style.display = 'none';
+  document.getElementById('device-step-done').style.display = 'none';
+  document.getElementById('device-modal').classList.add('open');
+}
+
+function closeDeviceModal() {
+  document.getElementById('device-modal').classList.remove('open');
+  if (devicePollTimer) { clearInterval(devicePollTimer); devicePollTimer = null; }
+  deviceSessionId = null;
+}
+
+async function startDeviceLogin() {
+  const tokenName = document.getElementById('device-token-name').value.trim();
+  try {
+    const r = await fetch('/api/device-login/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token_name: tokenName }),
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Failed to start device login'); return; }
+    deviceSessionId = data.session_id;
+    document.getElementById('device-user-code').textContent = data.user_code;
+    document.getElementById('device-verify-link').href = data.verification_uri;
+    document.getElementById('device-step-start').style.display = 'none';
+    document.getElementById('device-step-code').style.display = '';
+    document.getElementById('device-status').innerHTML = '<div class="device-spinner"></div><span>Waiting for authorization...</span>';
+    devicePollTimer = setInterval(pollDeviceLogin, 5000);
+  } catch (e) { alert('Failed to start device login: ' + e.message); }
+}
+
+async function pollDeviceLogin() {
+  if (!deviceSessionId) return;
+  try {
+    const r = await fetch('/api/device-login/poll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: deviceSessionId }),
+    });
+    const data = await r.json();
+    if (data.status === 'pending') {
+      if (data.interval && devicePollTimer) {
+        clearInterval(devicePollTimer);
+        devicePollTimer = setInterval(pollDeviceLogin, data.interval * 1000);
+      }
+      return;
+    }
+    if (data.status === 'complete') {
+      clearInterval(devicePollTimer);
+      devicePollTimer = null;
+      document.getElementById('device-step-code').style.display = 'none';
+      document.getElementById('device-step-done').style.display = '';
+      document.getElementById('device-done-name').textContent = data.token_name;
+      document.getElementById('device-done-user').textContent = data.username || 'unknown';
+      await loadTokenData();
+      return;
+    }
+    if (data.status === 'expired') {
+      clearInterval(devicePollTimer);
+      devicePollTimer = null;
+      document.getElementById('device-status').innerHTML = '<span style="color:var(--red)">Code expired. Please try again.</span>';
+      return;
+    }
+    if (data.status === 'error') {
+      clearInterval(devicePollTimer);
+      devicePollTimer = null;
+      document.getElementById('device-status').innerHTML = `<span style="color:var(--red)">Error: ${esc(data.error)}</span>`;
+      return;
+    }
+  } catch (e) {
+    console.warn('Device login poll error:', e);
+  }
+}
+
+async function copyDeviceCode() {
+  const code = document.getElementById('device-user-code').textContent;
+  try {
+    await navigator.clipboard.writeText(code);
+    const btn = document.getElementById('device-copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy Code'; }, 2000);
+  } catch { alert('Copy failed'); }
+}
+
 // ---- Init ----
 refresh();
 loadTokenData();
@@ -770,3 +862,213 @@ startTimer();
 setInterval(() => { if (currentTab === 'charts') loadCharts(); }, 30000);
 // Also refresh API key usage on settings tab
 setInterval(() => { if (currentTab === 'settings') loadApiKeys(); }, 5000);
+
+// ── Mobile Touch Enhancements ──
+function initMobileOptimizations() {
+  // Detect if device supports touch
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+  if (isTouchDevice) {
+    document.body.classList.add('touch-device');
+
+    // Add touch feedback for buttons
+    document.addEventListener('touchstart', function(e) {
+      if (e.target.classList.contains('btn') || e.target.classList.contains('top-tab')) {
+        e.target.classList.add('touch-active');
+      }
+    });
+
+    document.addEventListener('touchend', function(e) {
+      if (e.target.classList.contains('btn') || e.target.classList.contains('top-tab')) {
+        setTimeout(() => {
+          e.target.classList.remove('touch-active');
+        }, 150);
+      }
+    });
+  }
+
+  // Improve table horizontal scrolling
+  const tableContainer = document.querySelector('.tbl-container');
+  if (tableContainer) {
+    let startX, scrollLeft;
+
+    tableContainer.addEventListener('touchstart', function(e) {
+      startX = e.touches[0].pageX - tableContainer.offsetLeft;
+      scrollLeft = tableContainer.scrollLeft;
+    });
+
+    tableContainer.addEventListener('touchmove', function(e) {
+      e.preventDefault();
+      const x = e.touches[0].pageX - tableContainer.offsetLeft;
+      const walk = (x - startX) * 2;
+      tableContainer.scrollLeft = scrollLeft - walk;
+    });
+
+    // Check if table needs scroll indicator
+    if (tableContainer.scrollWidth > tableContainer.clientWidth) {
+      tableContainer.classList.add('scrollable');
+    }
+  }
+
+  // Enhance mobile tab navigation
+  const tabContainer = document.querySelector('.top-tabs');
+  if (tabContainer && window.innerWidth <= 768) {
+    // Enable smooth scrolling for tabs
+    tabContainer.style.scrollBehavior = 'smooth';
+
+    // Auto-scroll to active tab
+    const activeTab = tabContainer.querySelector('.top-tab.active');
+    if (activeTab) {
+      activeTab.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center'
+      });
+    }
+  }
+
+  // Improve mobile form inputs
+  const inputs = document.querySelectorAll('input[type="datetime-local"], input[type="number"], input[type="text"], select');
+  inputs.forEach(input => {
+    // Prevent zoom on iOS when focusing inputs
+    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+      input.style.fontSize = '16px';
+    }
+
+    // Add touch-friendly focus indicators
+    input.addEventListener('focus', function() {
+      this.parentElement.classList.add('input-focused');
+    });
+
+    input.addEventListener('blur', function() {
+      this.parentElement.classList.remove('input-focused');
+    });
+  });
+
+  // Mobile-optimized modal handling
+  const modals = document.querySelectorAll('.modal-overlay');
+  modals.forEach(modal => {
+    modal.addEventListener('touchmove', function(e) {
+      // Prevent body scroll when modal is open
+      e.preventDefault();
+    }, { passive: false });
+  });
+
+  // Enhance drawer behavior on mobile
+  const drawer = document.querySelector('.drawer');
+  if (drawer && window.innerWidth <= 768) {
+    // Add swipe-to-close gesture
+    let startY, startX;
+
+    drawer.addEventListener('touchstart', function(e) {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    });
+
+    drawer.addEventListener('touchmove', function(e) {
+      if (!startX || !startY) return;
+
+      const currentX = e.touches[0].clientX;
+      const currentY = e.touches[0].clientY;
+      const diffX = startX - currentX;
+      const diffY = startY - currentY;
+
+      // Horizontal swipe right to close
+      if (Math.abs(diffX) > Math.abs(diffY) && diffX < -50) {
+        closeDrawer();
+      }
+    });
+  }
+}
+
+// ── Enhanced Mobile Chart Interactions ──
+function enhanceChartTouch() {
+  const chartScroll = document.querySelector('.chart-scroll');
+  if (chartScroll && window.innerWidth <= 768) {
+    let isScrolling = false;
+
+    chartScroll.addEventListener('touchstart', function() {
+      isScrolling = true;
+    });
+
+    chartScroll.addEventListener('touchend', function() {
+      setTimeout(() => {
+        isScrolling = false;
+      }, 150);
+    });
+
+    // Improve chart tooltip behavior on touch
+    const canvas = chartScroll.querySelector('canvas');
+    if (canvas) {
+      canvas.addEventListener('touchend', function(e) {
+        if (!isScrolling) {
+          // Show chart details on tap
+          const rect = canvas.getBoundingClientRect();
+          const x = e.changedTouches[0].clientX - rect.left;
+          const y = e.changedTouches[0].clientY - rect.top;
+
+          // Trigger tooltip at touch position
+          if (window.showChartTooltip) {
+            window.showChartTooltip(x, y);
+          }
+        }
+      });
+    }
+  }
+}
+
+// ── Responsive Breakpoint Handling ──
+function handleBreakpointChanges() {
+  const mediaQuery = window.matchMedia('(max-width: 768px)');
+
+  function handleBreakpoint(e) {
+    const isMobile = e.matches;
+
+    // Adjust table sticky header position
+    const thead = document.querySelector('.tbl thead');
+    if (thead) {
+      thead.style.top = isMobile ? '106px' : '96px';
+    }
+
+    // Re-initialize mobile features
+    if (isMobile) {
+      enhanceChartTouch();
+
+      // Ensure active tab is visible
+      const activeTab = document.querySelector('.top-tab.active');
+      const tabContainer = document.querySelector('.top-tabs');
+      if (activeTab && tabContainer) {
+        setTimeout(() => {
+          activeTab.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+            inline: 'center'
+          });
+        }, 100);
+      }
+    }
+  }
+
+  mediaQuery.addListener(handleBreakpoint);
+  handleBreakpoint(mediaQuery);
+}
+
+// ── Initialize all mobile optimizations ──
+document.addEventListener('DOMContentLoaded', function() {
+  initMobileOptimizations();
+  handleBreakpointChanges();
+});
+
+// Re-run mobile optimizations when tab content changes
+const originalSwitchMainTab = switchMainTab;
+switchMainTab = function(tab) {
+  originalSwitchMainTab(tab);
+
+  // Re-initialize mobile features for new tab content
+  setTimeout(() => {
+    initMobileOptimizations();
+    if (window.innerWidth <= 768) {
+      enhanceChartTouch();
+    }
+  }, 100);
+};
