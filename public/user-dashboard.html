@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Copilot Proxy — User</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300..700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/dashboard.css">
+<style>
+  .user-card { background:var(--surface,#1a1c20); border:1px solid var(--border,#2a2d33); border-radius:10px; padding:16px; margin-bottom:14px; }
+  .user-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; margin-bottom:14px; }
+  .quota-bar { height:8px; background:rgba(255,255,255,0.06); border-radius:4px; overflow:hidden; margin-top:6px; }
+  .quota-fill { height:100%; background:linear-gradient(90deg,#7170ff,#3dd68c); transition:width .3s; }
+  .quota-fill.warn { background:linear-gradient(90deg,#f0b429,#ef5f5f); }
+  .quota-fill.full { background:#ef5f5f; }
+  .meta-row { display:flex; justify-content:space-between; font-size:12px; color:var(--text-3,#9da3ad); margin-top:6px; }
+  .meta-row .v { color:var(--text-1,#e8eaed); font-weight:500; }
+  .login-wrap { display:flex; align-items:center; justify-content:center; min-height:80vh; }
+  .login-card { background:var(--surface,#1a1c20); border:1px solid var(--border,#2a2d33); border-radius:12px; padding:32px; width:380px; }
+  .login-card h1 { font-size:20px; margin:0 0 6px 0; }
+  .login-card p { color:var(--text-3); font-size:13px; margin:0 0 18px; }
+  .login-card input { width:100%; padding:10px 12px; background:#0d0f12; border:1px solid var(--border); border-radius:6px; color:var(--text-1); font-family:inherit; font-size:13px; }
+  .login-card .err { color:#ef5f5f; font-size:12px; margin-top:8px; min-height:14px; }
+  .login-card button { margin-top:14px; width:100%; padding:10px; background:#7170ff; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; }
+  .login-card button:hover { background:#5a59e0; }
+  .login-card .alt { display:block; margin-top:14px; text-align:center; color:var(--text-4); font-size:11px; text-decoration:none; }
+  .table-wrap { overflow-x:auto; }
+  table.user-logs { width:100%; border-collapse:collapse; font-size:12px; }
+  table.user-logs th, table.user-logs td { padding:6px 10px; border-bottom:1px solid rgba(255,255,255,0.04); text-align:left; }
+  table.user-logs th { font-size:10px; text-transform:uppercase; color:var(--text-4); font-weight:600; letter-spacing:.05em; }
+  .status-ok { color:#3dd68c; }
+  .status-err { color:#ef5f5f; }
+  .preview { color:var(--text-3); max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:bottom; }
+  .pill { display:inline-block; background:rgba(113,112,255,0.15); color:#a5a4ff; padding:2px 8px; border-radius:10px; font-size:10px; }
+  .pill.unl { background:rgba(61,214,140,0.15); color:#3dd68c; }
+  .pill.dis { background:rgba(239,95,95,0.15); color:#ef5f5f; }
+  #chart-scroll { width:100%; overflow-x:auto; }
+  #chart-tip { position:fixed; pointer-events:none; background:#0d0f12; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:11px; z-index:100; opacity:0; transition:opacity .15s; }
+  #chart-tip.show { opacity:1; }
+  .tip-label { font-weight:600; margin-bottom:4px; }
+  .tip-row { display:flex; justify-content:space-between; gap:12px; padding:1px 0; }
+  .tip-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+  .tip-val { font-weight:600; }
+  .share-item { margin-bottom:8px; }
+  .share-row { display:flex; justify-content:space-between; font-size:11px; margin-bottom:3px; }
+  .share-name { color:var(--text-2); }
+  .share-pct { color:var(--text-4); }
+  .share-track { height:6px; background:rgba(255,255,255,0.04); border-radius:3px; overflow:hidden; }
+  .share-fill { height:100%; }
+</style>
+</head>
+<body>
+  <div id="login-screen" class="login-wrap" style="display:none">
+    <div class="login-card">
+      <h1>User Dashboard</h1>
+      <p>Sign in with your API key to view your usage and quota.</p>
+      <input id="login-key" type="password" placeholder="sk-proxy-..." autocomplete="off"/>
+      <div class="err" id="login-err"></div>
+      <button onclick="userLogin()">Sign in</button>
+      <a class="alt" href="/">Admin login →</a>
+    </div>
+  </div>
+
+  <div id="app" style="display:none">
+    <header class="hdr">
+      <div class="hdr-left">
+        <div class="hdr-mark"></div>
+        <span class="hdr-title">Copilot Proxy</span>
+        <div class="hdr-sep"></div>
+        <span class="hdr-endpoint">User View · __PORT__</span>
+      </div>
+      <div class="hdr-right">
+        <span class="hdr-user" id="user-name"></span>
+        <button class="btn" onclick="userRefresh()">Refresh</button>
+        <button class="btn" onclick="userLogout()">Logout</button>
+      </div>
+    </header>
+
+    <div class="page">
+      <div class="user-grid">
+        <div class="user-card" id="card-quota">
+          <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">Free Quota</div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px">
+            <div style="font-size:22px;font-weight:600" id="q-used">—</div>
+            <div style="color:var(--text-4);font-size:12px">/ <span id="q-total">—</span></div>
+          </div>
+          <div class="quota-bar"><div class="quota-fill" id="q-fill" style="width:0%"></div></div>
+          <div class="meta-row"><span>Resets</span><span class="v" id="q-reset">—</span></div>
+        </div>
+
+        <div class="user-card">
+          <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">Balance</div>
+          <div style="font-size:22px;font-weight:600;margin-top:6px" id="bal">—</div>
+          <div class="meta-row"><span>Status</span><span class="v" id="status-pill">—</span></div>
+        </div>
+
+        <div class="user-card">
+          <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">Account</div>
+          <div style="font-size:14px;font-weight:600;margin-top:6px" id="acct-name">—</div>
+          <div class="meta-row"><span>Role</span><span class="v" id="acct-role">—</span></div>
+          <div class="meta-row"><span>Key</span><span class="v" id="acct-prefix">—</span></div>
+          <div class="meta-row"><span>Models</span><span class="v" id="acct-models">all</span></div>
+        </div>
+      </div>
+
+      <div class="user-card">
+        <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Hourly Requests</div>
+        <div id="chart-scroll"><canvas id="chart-hourly" style="display:block"></canvas></div>
+      </div>
+
+      <div class="user-grid">
+        <div class="user-card">
+          <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Model Distribution</div>
+          <div id="chart-models"></div>
+        </div>
+        <div class="user-card">
+          <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Usage by Day (cost tokens)</div>
+          <div id="chart-byday"></div>
+        </div>
+      </div>
+
+      <div class="user-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">Recent Calls</div>
+          <span style="font-size:11px;color:var(--text-4)" id="logs-count">0</span>
+        </div>
+        <div class="table-wrap">
+          <table class="user-logs">
+            <thead><tr>
+              <th>Time</th><th>Model</th><th>Status</th><th>Latency</th><th>Tokens</th><th>Preview</th>
+            </tr></thead>
+            <tbody id="logs-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="chart-tip"></div>
+  <script src="/shared-charts.js"></script>
+  <script src="/user-dashboard.js"></script>
+</body>
+</html>

@@ -116,9 +116,9 @@ async function handleRequest(req, res) {
   }
 
   // Static assets (CSS/JS from public/)
-  if (req.method === "GET" && (req.url === "/dashboard.css" || req.url === "/dashboard.js")) {
-    const file = req.url === "/dashboard.css" ? "dashboard.css" : "dashboard.js";
-    const contentType = req.url === "/dashboard.css" ? "text/css; charset=utf-8" : "application/javascript; charset=utf-8";
+  if (req.method === "GET" && (req.url === "/dashboard.css" || req.url === "/dashboard.js" || req.url === "/shared-charts.js" || req.url === "/user-dashboard.js")) {
+    const file = req.url.slice(1);
+    const contentType = req.url.endsWith(".css") ? "text/css; charset=utf-8" : "application/javascript; charset=utf-8";
     try {
       const content = readFileSync(join(PUBLIC_DIR, file), "utf8");
       res.writeHead(200, { "Content-Type": contentType });
