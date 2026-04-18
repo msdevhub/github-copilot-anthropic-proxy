@@ -11,9 +11,14 @@ import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_
 import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
-import { checkApiKey, checkDashboardSession, createDashboardSession, destroyDashboardSession } from "./lib/auth.mjs";
+import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession } from "./lib/auth.mjs";
 import { db, addLog } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
+import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey } from "./lib/keys-v2.mjs";
+import { reloadPricing, getPricing, estimateCost } from "./lib/pricing.mjs";
+import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
+
+reloadPricing();
 
 // ─── CLI: --add-key <name> ───────────────────────────────────────────────────
 const addKeyIdx = process.argv.indexOf("--add-key");
@@ -25,6 +30,17 @@ if (addKeyIdx !== -1) {
   keys.push({ key: newKey, name: keyName, rate_limit: { rpm: 0, rpd: 0, tpm: 0 }, created: new Date().toISOString() });
   saveApiKeys(keys);
   console.log(`✓ API key added for "${keyName}":\n  ${newKey}`);
+  process.exit(0);
+}
+
+// ─── CLI: --add-admin <name> ─────────────────────────────────────────────────
+// Creates a v2 admin key (unlimited). Prints raw key once.
+const addAdminIdx = process.argv.indexOf("--add-admin");
+if (addAdminIdx !== -1) {
+  const name = process.argv[addAdminIdx + 1];
+  if (!name) { console.error("Usage: node server.mjs --add-admin <name>"); process.exit(1); }
+  const { raw } = createKey({ name, role: "admin", unlimited: 1, free_quota: 0, note: "admin via --add-admin" });
+  console.log(`✓ admin key created for "${name}":\n  ${raw}`);
   process.exit(0);
 }
 
@@ -600,6 +616,19 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // ── Admin API (Stage 2) — requires admin v2 key OR a dashboard session ────
+  if (req.url.startsWith("/admin/")) {
+    const session = checkDashboardSession(req);
+    const adm = session ? { ok: true } : checkAdmin(req);
+    if (!adm.ok) {
+      res.writeHead(adm.reason === "no_key" || adm.reason === "not_found" ? 401 : 403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "auth_error", reason: adm.reason } }));
+      return;
+    }
+    await handleAdmin(req, res);
+    return;
+  }
+
   // GET /v1/models — return supported models list (needed by Claude Code)
   if (req.method === "GET" && req.url.startsWith("/v1/models")) {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -698,6 +727,18 @@ async function handleRequest(req, res) {
 
       logEntry.model = parsed.model || null;
       logEntry.stream = !!parsed.stream;
+
+      // ── Quota preflight (Stage 2) ─────────────────────────────────────────
+      const pf = quotaPreflight(apiKeyCheck.keyRow, parsed, parsed.model);
+      if (!pf.ok) {
+        logEntry.status = pf.status;
+        logEntry.error = pf.body?.error?.message || `quota rejected (${pf.status})`;
+        logEntry.durationMs = Date.now() - startTime;
+        addLog(logEntry);
+        res.writeHead(pf.status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ type: "error", ...pf.body }));
+        return;
+      }
 
       const msgCount = parsed.messages?.length || 0;
       const sysLen = Array.isArray(parsed.system) ? parsed.system.reduce((s, b) => s + (b.text?.length || 0), 0) : (parsed.system?.length || 0);
@@ -823,7 +864,8 @@ async function handleRequest(req, res) {
     if (apiKeyCheck.name && logEntry.usage) {
       recordTokenUsage(apiKeyCheck.name, (logEntry.usage.input || 0) + (logEntry.usage.output || 0));
     }
-    addLog(logEntry);
+    const logId = addLog(logEntry);
+    chargeFromLog(apiKeyCheck.keyRow, logEntry, logId);
 
   } catch (err) {
     logEntry.status = 502;
@@ -838,6 +880,113 @@ async function handleRequest(req, res) {
       res.end();
     }
   }
+}
+
+// ─── /admin/* (Stage 2) ──────────────────────────────────────────────────────
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  if (!chunks.length) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { return null; }
+}
+
+function publicKeyView(row) {
+  if (!row) return null;
+  let allowed = null;
+  if (row.allowed_models) { try { allowed = JSON.parse(row.allowed_models); } catch {} }
+  return {
+    key_hash: row.key_hash,
+    key_prefix: row.key_prefix,
+    name: row.name,
+    role: row.role,
+    balance_tokens: row.balance_tokens,
+    free_quota: row.free_quota,
+    free_used: row.free_used,
+    free_reset_at: row.free_reset_at,
+    unlimited: !!row.unlimited,
+    allowed_models: allowed,
+    status: row.status,
+    token_name: row.token_name || null,
+    created_at: row.created_at,
+    last_used_at: row.last_used_at,
+    note: row.note,
+  };
+}
+
+async function handleAdmin(req, res) {
+  const url = new URL(req.url, "http://localhost");
+  const path = url.pathname;
+  const send = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+  // GET /admin/keys
+  if (req.method === "GET" && path === "/admin/keys") {
+    return send(200, { keys: listKeys().map(publicKeyView) });
+  }
+
+  // POST /admin/keys
+  if (req.method === "POST" && path === "/admin/keys") {
+    const body = await readJsonBody(req);
+    if (!body || !body.name) return send(400, { error: "name is required" });
+    const created = createKey({
+      name: body.name,
+      role: body.role === "admin" ? "admin" : "user",
+      free_quota: Number.isFinite(body.free_quota) ? body.free_quota : 10000,
+      balance_tokens: Number.isFinite(body.balance_tokens) ? body.balance_tokens : 0,
+      unlimited: !!body.unlimited,
+      allowed_models: Array.isArray(body.allowed_models) ? body.allowed_models : null,
+      token_name: body.token_name || null,
+      note: body.note || null,
+    });
+    return send(201, { ok: true, key: created.raw, key_hash: created.key_hash, key_prefix: created.prefix });
+  }
+
+  // /admin/keys/:hash[/topup|/reset-free]
+  const m = path.match(/^\/admin\/keys\/([a-f0-9]{64})(?:\/(topup|reset-free))?$/);
+  if (m) {
+    const h = m[1], action = m[2];
+    const row = getKeyByHash(h);
+    if (!row) return send(404, { error: "key not found" });
+
+    if (action === "topup" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      if (!body || !Number.isFinite(body.tokens) || body.tokens <= 0) return send(400, { error: "tokens (positive number) required" });
+      return send(200, { ok: true, key: publicKeyView(topupKey(h, body.tokens)) });
+    }
+    if (action === "reset-free" && req.method === "POST") {
+      return send(200, { ok: true, key: publicKeyView(resetFree(h)) });
+    }
+    if (req.method === "PATCH") {
+      const body = await readJsonBody(req);
+      if (!body) return send(400, { error: "invalid JSON" });
+      return send(200, { ok: true, key: publicKeyView(updateKey(h, body)) });
+    }
+    if (req.method === "DELETE") {
+      return send(200, { ok: true, key: publicKeyView(disableKey(h)) });
+    }
+    if (req.method === "GET") {
+      return send(200, { key: publicKeyView(row) });
+    }
+  }
+
+  // GET /admin/usage?key_hash=&from=&to=&limit=
+  if (req.method === "GET" && path === "/admin/usage") {
+    const keyHash = url.searchParams.get("key_hash") || null;
+    const from = url.searchParams.get("from") || null;
+    const to = url.searchParams.get("to") || null;
+    const limit = Number(url.searchParams.get("limit") || 200);
+    return send(200, { ledger: listLedger({ keyHash, from, to, limit }) });
+  }
+
+  // GET /admin/pricing
+  if (req.method === "GET" && path === "/admin/pricing") {
+    return send(200, { pricing: getPricing() });
+  }
+  // POST /admin/pricing/reload
+  if (req.method === "POST" && path === "/admin/pricing/reload") {
+    return send(200, { pricing: reloadPricing() });
+  }
+
+  return send(404, { error: "not found" });
 }
 
 // ─── /v1/chat/completions (OpenAI-compatible) ───────────────────────────────
@@ -910,6 +1059,20 @@ async function handleChatCompletions(req, res) {
     const { preview, requestSummary } = summarizeChatRequest(parsed);
     logEntry.preview = preview;
     logEntry.requestSummary = requestSummary;
+
+    // ── Quota preflight (Stage 2) ─────────────────────────────────────────
+    {
+      const pf = quotaPreflight(apiKeyCheck.keyRow, parsed, parsed.model);
+      if (!pf.ok) {
+        logEntry.status = pf.status;
+        logEntry.error = pf.body?.error?.message || `quota rejected (${pf.status})`;
+        logEntry.durationMs = Date.now() - startTime;
+        addLog(logEntry);
+        res.writeHead(pf.status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(pf.body));
+        return;
+      }
+    }
 
     // Ask upstream to include usage in stream's final chunk (OpenAI-compat).
     if (parsed.stream && !parsed.stream_options) {
@@ -996,7 +1159,8 @@ async function handleChatCompletions(req, res) {
     if (apiKeyCheck.name && logEntry.usage) {
       recordTokenUsage(apiKeyCheck.name, (logEntry.usage.input || 0) + (logEntry.usage.output || 0));
     }
-    addLog(logEntry);
+    const logId = addLog(logEntry);
+    chargeFromLog(apiKeyCheck.keyRow, logEntry, logId);
 
   } catch (err) {
     logEntry.status = 502;
