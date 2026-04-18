@@ -59,6 +59,9 @@ function switchMainTab(tab) {
   if (tab === 'charts' && !chartLoaded) loadCharts();
   if (tab === 'settings') { loadTokenData(); loadApiKeys(); }
   if (tab === 'keys') { v2LoadKeys(); }
+  if (tab === 'usage') { loadOverview(); }
+  if (tab === 'pricing') { loadPricing(); }
+  if (tab === 'audit') { loadAudit(); }
 }
 
 function toggleAuto() {
@@ -544,13 +547,13 @@ const MODEL_COLORS = ['#7170ff','#3dd68c','#f0b429','#a78bfa','#ef5f5f','#60a5fa
 const tip = document.getElementById('chart-tip');
 function showTip(e, html) {
   tip.innerHTML = html;
-  tip.classList.add('show');
+  tip.classList.add('open');
   const x = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
   const y = e.clientY - tip.offsetHeight - 8;
   tip.style.left = x + 'px';
   tip.style.top = (y < 4 ? e.clientY + 16 : y) + 'px';
 }
-function hideTip() { tip.classList.remove('show'); }
+function hideTip() { tip.classList.remove('open'); }
 
 let hourlyHits = [], cachedHourly = [];
 
@@ -1339,63 +1342,31 @@ switchMainTab = function(tab) {
   }, 100);
 };
 
-// ─── v2 Keys tab (Stage 2: quota + balance) ─────────────────────────────────
+// ─── v2 Keys tab (Stage 4: full-featured) ───────────────────────────────────
+let v2Keys = [];
+let v2SortCol = 'created_at';
+let v2SortDir = 'desc';
+let v2ExpandedHash = null;
+
 async function v2LoadKeys() {
-  const el = document.getElementById('v2-keys-list');
-  if (!el) return;
-  el.innerHTML = 'Loading...';
+  const tbody = document.getElementById('keys-body');
+  if (!tbody) return;
   try {
     const r = await fetch('/admin/keys', { credentials: 'include' });
-    if (!r.ok) { el.innerHTML = '<div style="color:var(--c-red)">load failed: HTTP ' + r.status + '</div>'; return; }
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan="10" style="color:var(--c-red);text-align:center">load failed: HTTP ${r.status}</td></tr>`; return; }
     const { keys } = await r.json();
-    if (!keys.length) { el.innerHTML = '<div style="color:var(--text-4)">no keys yet</div>'; return; }
-    const rows = keys.map(k => `
-      <tr>
-        <td>${escapeHTML(k.name || '-')}</td>
-        <td><code style="font-size:11px">${escapeHTML(k.key_prefix || '')}…</code></td>
-        <td>${k.role}</td>
-        <td>${k.unlimited ? '<span style="color:var(--accent-bright)">unlimited</span>' : `${fmt(k.free_used)} / ${fmt(k.free_quota)}`}</td>
-        <td>${fmt(k.balance_tokens)}</td>
-        <td><span style="color:${k.status === 'active' ? 'var(--c-green)' : 'var(--c-red)'}">${k.status}</span></td>
-        <td style="font-size:11px;color:var(--text-4)">${k.last_used_at || '-'}</td>
-        <td style="white-space:nowrap">
-          <button class="btn" onclick="v2Topup('${k.key_hash}','${escapeHTML(k.name || '')}')">Topup</button>
-          <button class="btn" onclick="v2EditQuota('${k.key_hash}', ${k.free_quota})">Quota</button>
-          <button class="btn" onclick="v2ResetFree('${k.key_hash}')">Reset</button>
-          <button class="btn" onclick="v2Disable('${k.key_hash}')">Disable</button>
-        </td>
-      </tr>`).join('');
-    el.innerHTML = `
-      <table class="tbl" style="width:100%">
-        <thead><tr>
-          <th>Name</th><th>Key</th><th>Role</th><th>Free used / quota</th><th>Balance</th><th>Status</th><th>Last used</th><th>Actions</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+    v2Keys = keys || [];
+    v2RenderKeys();
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--c-red)">' + escapeHTML(e.message) + '</div>';
+    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--c-red);text-align:center">${escapeHTML(e.message)}</td></tr>`;
   }
 }
 
 function escapeHTML(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 
 async function v2CreateKey() {
-  const body = {
-    name: document.getElementById('v2-add-name').value.trim(),
-    role: document.getElementById('v2-add-role').value,
-    free_quota: Number(document.getElementById('v2-add-free').value) || 0,
-    balance_tokens: Number(document.getElementById('v2-add-balance').value) || 0,
-    unlimited: document.getElementById('v2-add-unlimited').value === '1',
-  };
-  if (!body.name) { alert('name required'); return; }
-  const r = await fetch('/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
-  const j = await r.json();
-  if (!r.ok) { alert('create failed: ' + (j.error || r.status)); return; }
-  const banner = document.getElementById('v2-new-key-banner');
-  document.getElementById('v2-new-key-value').textContent = j.key;
-  banner.style.display = 'block';
-  document.getElementById('v2-add-name').value = '';
-  v2LoadKeys();
+  // Legacy noop — Stage 4 uses v2SubmitCreateModal via the modal.
+  v2OpenCreateModal();
 }
 
 function v2CopyNewKey() {
@@ -1403,25 +1374,9 @@ function v2CopyNewKey() {
   navigator.clipboard.writeText(v).then(() => { /* ok */ }, () => alert('copy failed'));
 }
 
-async function v2Topup(hash, name) {
-  const v = prompt(`Top up "${name}" — tokens to add:`, '10000');
-  if (!v) return;
-  const tokens = Number(v);
-  if (!Number.isFinite(tokens) || tokens <= 0) { alert('invalid amount'); return; }
-  const r = await fetch(`/admin/keys/${hash}/topup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ tokens }) });
-  if (!r.ok) { alert('topup failed: HTTP ' + r.status); return; }
-  v2LoadKeys();
-}
+async function v2Topup(hash, name) { v2OpenTopupModal(hash, name); }
 
-async function v2EditQuota(hash, current) {
-  const v = prompt('New free monthly quota:', String(current));
-  if (v === null) return;
-  const free_quota = Number(v);
-  if (!Number.isFinite(free_quota) || free_quota < 0) { alert('invalid'); return; }
-  const r = await fetch(`/admin/keys/${hash}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ free_quota }) });
-  if (!r.ok) { alert('update failed: HTTP ' + r.status); return; }
-  v2LoadKeys();
-}
+async function v2EditQuota(hash) { v2OpenQuotaModal(hash); }
 
 async function v2ResetFree(hash) {
   if (!confirm('Reset free_used to 0?')) return;
@@ -1435,4 +1390,337 @@ async function v2Disable(hash) {
   const r = await fetch(`/admin/keys/${hash}`, { method: 'DELETE', credentials: 'include' });
   if (!r.ok) { alert('disable failed: HTTP ' + r.status); return; }
   v2LoadKeys();
+}
+
+function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+function escapeAttr(s) { return String(s ?? '').replace(/'/g, '&#39;').replace(/"/g, '&quot;'); }
+
+function v2SortKeys(col) {
+  if (v2SortCol === col) v2SortDir = v2SortDir === 'asc' ? 'desc' : 'asc';
+  else { v2SortCol = col; v2SortDir = 'asc'; }
+  v2RenderKeys();
+}
+
+function v2RenderKeys() {
+  const tbody = document.getElementById('keys-body');
+  if (!tbody) return;
+  const search = (document.getElementById('k-search')?.value || '').trim().toLowerCase();
+  const fStatus = document.getElementById('k-status')?.value || '';
+  const fRole = document.getElementById('k-role')?.value || '';
+  const fUnlim = document.getElementById('k-unlim')?.value || '';
+
+  let rows = v2Keys.filter(k => {
+    if (search && !(k.name || '').toLowerCase().includes(search)) return false;
+    if (fStatus && k.status !== fStatus) return false;
+    if (fRole && k.role !== fRole) return false;
+    if (fUnlim && String(k.unlimited ? 1 : 0) !== fUnlim) return false;
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    let av = a[v2SortCol], bv = b[v2SortCol];
+    if (av == null) av = '';
+    if (bv == null) bv = '';
+    if (typeof av === 'number' && typeof bv === 'number') return v2SortDir === 'asc' ? av - bv : bv - av;
+    av = String(av); bv = String(bv);
+    return v2SortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+  });
+
+  document.querySelectorAll('#keys-tbl .sort-arrow').forEach(el => {
+    el.textContent = el.dataset.col === v2SortCol ? (v2SortDir === 'asc' ? '▲' : '▼') : '';
+  });
+
+  setText('k-total', v2Keys.length);
+  setText('k-active', v2Keys.filter(k => k.status === 'active').length);
+  setText('k-unlimited', v2Keys.filter(k => k.unlimited).length);
+  setText('k-disabled', v2Keys.filter(k => k.status !== 'active').length);
+  setText('k-balance', fmt(v2Keys.reduce((s, k) => s + (k.balance_tokens || 0), 0)));
+
+  if (!rows.length) { tbody.textContent = ''; const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="10" style="text-align:center;color:var(--text-4);padding:20px">no keys match the filter</td>'; tbody.appendChild(tr); return; }
+
+  const html = rows.map(k => {
+    const free = k.unlimited ? '<span style="color:var(--accent-bright)">∞</span>' : `${fmt(k.free_used)} / ${fmt(k.free_quota)}`;
+    const statusColor = k.status === 'active' ? 'var(--c-green)' : 'var(--c-red)';
+    const expanded = v2ExpandedHash === k.key_hash;
+    const main = `<tr class="keys-row" data-hash="${k.key_hash}" style="cursor:pointer" onclick="v2ToggleExpand('${k.key_hash}', event)">
+        <td>${escapeHTML(k.name || '-')}${k.note ? `<div style="font-size:10px;color:var(--text-4)">${escapeHTML(k.note)}</div>` : ''}</td>
+        <td><code style="font-size:11px">${escapeHTML(k.key_prefix || '')}…</code></td>
+        <td>${k.role}</td>
+        <td><span style="color:${statusColor}">${k.status}</span></td>
+        <td>${k.unlimited ? 'yes' : 'no'}</td>
+        <td>${free}</td>
+        <td>${fmt(k.balance_tokens || 0)}</td>
+        <td style="font-size:11px;color:var(--text-4)">${escapeHTML(k.last_used_at || '-')}</td>
+        <td style="font-size:11px;color:var(--text-4)">${escapeHTML((k.created_at || '').slice(0, 16))}</td>
+        <td style="white-space:nowrap" onclick="event.stopPropagation()">
+          <button class="btn" onclick="v2OpenTopupModal('${k.key_hash}','${escapeAttr(k.name)}')">Topup</button>
+          <button class="btn" onclick="v2OpenQuotaModal('${k.key_hash}')">Quota</button>
+          <button class="btn" onclick="v2ResetFree('${k.key_hash}')">Reset</button>
+          <button class="btn" onclick="v2ToggleUnlimited('${k.key_hash}', ${k.unlimited ? 1 : 0})">${k.unlimited ? '✓Unlim' : 'Unlim'}</button>
+          ${k.status === 'active' ? `<button class="btn" onclick="v2Disable('${k.key_hash}')">Disable</button>` : `<button class="btn on" onclick="v2Enable('${k.key_hash}')">Enable</button>`}
+        </td>
+      </tr>`;
+    if (!expanded) return main;
+    return main + `<tr class="keys-expand"><td colspan="10" id="ledger-${k.key_hash}" style="padding:10px 14px;background:rgba(255,255,255,.02)">Loading ledger…</td></tr>`;
+  }).join('');
+  tbody.innerHTML = html;
+
+  if (v2ExpandedHash) v2LoadLedger(v2ExpandedHash);
+}
+
+function v2ToggleExpand(hash, ev) {
+  if (ev && ev.target && ev.target.tagName === 'BUTTON') return;
+  v2ExpandedHash = (v2ExpandedHash === hash) ? null : hash;
+  v2RenderKeys();
+}
+
+async function v2LoadLedger(hash) {
+  const cell = document.getElementById('ledger-' + hash);
+  if (!cell) return;
+  try {
+    const r = await fetch(`/admin/keys/${hash}/ledger?limit=20`, { credentials: 'include' });
+    if (!r.ok) { cell.textContent = `ledger HTTP ${r.status}`; return; }
+    const { ledger } = await r.json();
+    if (!ledger || !ledger.length) { cell.textContent = 'no ledger entries'; return; }
+    cell.innerHTML = `<div style="font-size:11px;color:var(--text-4);margin-bottom:6px">Last ${ledger.length} ledger entries</div>
+      <table class="tbl" style="font-size:11px">
+        <thead><tr><th>Time</th><th>Model</th><th>Input</th><th>Output</th><th>Cost</th><th>Source</th></tr></thead>
+        <tbody>${ledger.map(l => `<tr><td>${escapeHTML(l.ts || '')}</td><td>${escapeHTML(l.model || '-')}</td><td>${fmt(l.input_tokens || 0)}</td><td>${fmt(l.output_tokens || 0)}</td><td>${fmt(l.cost_tokens || 0)}</td><td>${escapeHTML(l.source || '-')}</td></tr>`).join('')}</tbody>
+      </table>`;
+  } catch (e) { cell.textContent = 'error: ' + e.message; }
+}
+
+// ── Modals (Stage 4) ───────────────────────────────────────────────────────
+function v2OpenCreateModal() {
+  document.getElementById('v2c-name').value = '';
+  document.getElementById('v2c-role').value = 'user';
+  document.getElementById('v2c-free').value = 10000;
+  document.getElementById('v2c-balance').value = 0;
+  document.getElementById('v2c-unlimited').value = '0';
+  document.getElementById('v2c-models').value = '';
+  document.getElementById('v2c-note').value = '';
+  document.getElementById('v2-create-modal').classList.add('open');
+}
+function v2CloseCreateModal() { document.getElementById('v2-create-modal').classList.remove('open'); }
+
+async function v2SubmitCreateModal() {
+  const name = document.getElementById('v2c-name').value.trim();
+  if (!name) { alert('name required'); return; }
+  const modelsRaw = document.getElementById('v2c-models').value.trim();
+  const allowed_models = modelsRaw ? modelsRaw.split(',').map(s => s.trim()).filter(Boolean) : null;
+  const body = {
+    name,
+    role: document.getElementById('v2c-role').value,
+    free_quota: Number(document.getElementById('v2c-free').value) || 0,
+    balance_tokens: Number(document.getElementById('v2c-balance').value) || 0,
+    unlimited: document.getElementById('v2c-unlimited').value === '1',
+    allowed_models,
+    note: document.getElementById('v2c-note').value.trim() || null,
+  };
+  const r = await fetch('/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert('create failed: ' + (j.error || r.status)); return; }
+  v2CloseCreateModal();
+  document.getElementById('v2-new-key-value').textContent = j.key;
+  document.getElementById('v2-new-key-banner').style.display = 'block';
+  v2LoadKeys();
+}
+
+function v2OpenQuotaModal(hash) {
+  const k = v2Keys.find(x => x.key_hash === hash);
+  if (!k) return;
+  document.getElementById('v2q-hash').value = hash;
+  document.getElementById('v2q-free').value = k.free_quota || 0;
+  document.getElementById('v2q-models').value = (k.allowed_models || []).join(', ');
+  document.getElementById('v2q-note').value = k.note || '';
+  document.getElementById('v2-quota-modal').classList.add('open');
+}
+function v2CloseQuotaModal() { document.getElementById('v2-quota-modal').classList.remove('open'); }
+
+async function v2SubmitQuotaModal() {
+  const hash = document.getElementById('v2q-hash').value;
+  const modelsRaw = document.getElementById('v2q-models').value.trim();
+  const body = {
+    free_quota: Number(document.getElementById('v2q-free').value) || 0,
+    allowed_models: modelsRaw ? modelsRaw.split(',').map(s => s.trim()).filter(Boolean) : null,
+    note: document.getElementById('v2q-note').value.trim() || null,
+  };
+  const r = await fetch(`/admin/keys/${hash}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+  if (!r.ok) { alert('save failed: HTTP ' + r.status); return; }
+  v2CloseQuotaModal();
+  v2LoadKeys();
+}
+
+function v2OpenTopupModal(hash, name) {
+  document.getElementById('v2t-hash').value = hash;
+  document.getElementById('v2t-name').textContent = name;
+  document.getElementById('v2t-tokens').value = 10000;
+  document.getElementById('v2-topup-modal').classList.add('open');
+}
+function v2CloseTopupModal() { document.getElementById('v2-topup-modal').classList.remove('open'); }
+
+async function v2SubmitTopupModal() {
+  const hash = document.getElementById('v2t-hash').value;
+  const tokens = Number(document.getElementById('v2t-tokens').value);
+  if (!Number.isFinite(tokens) || tokens <= 0) { alert('invalid amount'); return; }
+  const r = await fetch(`/admin/keys/${hash}/topup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ tokens }) });
+  if (!r.ok) { alert('topup failed: HTTP ' + r.status); return; }
+  v2CloseTopupModal();
+  v2LoadKeys();
+}
+
+async function v2ToggleUnlimited(hash, current) {
+  const next = current ? 0 : 1;
+  const r = await fetch(`/admin/keys/${hash}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ unlimited: next }) });
+  if (!r.ok) { alert('toggle failed: HTTP ' + r.status); return; }
+  v2LoadKeys();
+}
+
+async function v2Enable(hash) {
+  const r = await fetch(`/admin/keys/${hash}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ status: 'active' }) });
+  if (!r.ok) { alert('enable failed: HTTP ' + r.status); return; }
+  v2LoadKeys();
+}
+
+// ─── Usage Overview tab ─────────────────────────────────────────────────────
+function _ovRange() {
+  const r = document.getElementById('ov-range').value;
+  const showCustom = (r === 'custom');
+  document.getElementById('ov-from').style.display = showCustom ? '' : 'none';
+  document.getElementById('ov-to').style.display = showCustom ? '' : 'none';
+  document.getElementById('ov-tilde').style.display = showCustom ? '' : 'none';
+  if (showCustom) {
+    return {
+      from: (document.getElementById('ov-from').value || '').replace('T', ' ') || null,
+      to: (document.getElementById('ov-to').value || '').replace('T', ' ') || null,
+    };
+  }
+  const now = new Date();
+  let from = null;
+  if (r === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  else if (r === '7d') { from = new Date(now); from.setDate(now.getDate() - 7); }
+  else if (r === '30d') { from = new Date(now); from.setDate(now.getDate() - 30); }
+  return { from: from ? from.toISOString().replace('T', ' ').slice(0, 19) : null, to: null };
+}
+
+async function loadOverview() {
+  const { from, to } = _ovRange();
+  const qs = new URLSearchParams();
+  if (from) qs.set('from', from);
+  if (to) qs.set('to', to);
+  try {
+    const r = await fetch('/admin/overview?' + qs.toString(), { credentials: 'include' });
+    if (!r.ok) { alert('overview HTTP ' + r.status); return; }
+    const j = await r.json();
+    const t = j.totals || {};
+    setText('ov-req', fmt(t.requests || 0));
+    setText('ov-input', fmt(t.input_tokens || 0));
+    setText('ov-output', fmt(t.output_tokens || 0));
+    setText('ov-cost', fmt(t.cost || 0));
+
+    const byKeyRows = (j.byKey || []).slice(0, 50).map(k => `<tr><td>${escapeHTML(k.name || '(unknown)')}</td><td>${fmt(k.requests)}</td><td>${fmt(k.input_tokens)}</td><td>${fmt(k.output_tokens)}</td><td>${fmt(k.cost)}</td></tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-4)">no data</td></tr>';
+    document.getElementById('ov-bykey').innerHTML = byKeyRows;
+
+    const byModelRows = (j.byModel || []).map(m => `<tr><td>${escapeHTML(m.model || '-')}</td><td>${fmt(m.requests)}</td><td>${fmt(m.input_tokens)}</td><td>${fmt(m.output_tokens)}</td><td>${fmt(m.cost)}</td><td>${fmt(m.avg_cost)}</td></tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-4)">no data</td></tr>';
+    document.getElementById('ov-bymodel').innerHTML = byModelRows;
+
+    const daily = j.daily || [];
+    const maxCost = Math.max(1, ...daily.map(d => d.cost || 0));
+    const dailyRows = daily.map(d => {
+      const w = Math.max(2, Math.round((d.cost || 0) / maxCost * 100));
+      return `<tr><td>${escapeHTML(d.day)}</td><td>${fmt(d.requests)}</td><td>${fmt(d.cost)}</td><td><div style="height:10px;width:${w}%;background:var(--accent-bright);border-radius:2px"></div></td></tr>`;
+    }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-4)">no data</td></tr>';
+    document.getElementById('ov-daily').innerHTML = dailyRows;
+  } catch (e) { alert('overview failed: ' + e.message); }
+}
+
+// ─── Pricing tab ────────────────────────────────────────────────────────────
+async function loadPricing() {
+  const tbody = document.getElementById('pricing-body');
+  if (!tbody) return;
+  try {
+    const r = await fetch('/admin/pricing', { credentials: 'include' });
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan="4" style="color:var(--c-red);text-align:center">HTTP ${r.status}</td></tr>`; return; }
+    const { pricing } = await r.json();
+    const rows = Object.keys(pricing).sort((a, b) => a === '_default' ? -1 : b === '_default' ? 1 : a.localeCompare(b));
+    const html = rows.map(model => {
+      const p = pricing[model];
+      const isDefault = model === '_default';
+      const safeId = model.replace(/[^a-zA-Z0-9_-]/g, '_');
+      return `<tr>
+        <td>${escapeHTML(model)}${isDefault ? ' <span style="color:var(--text-4);font-size:10px">(fallback)</span>' : ''}</td>
+        <td><input type="number" id="pr-in-${safeId}" value="${p.input_multiplier}" step="0.1" min="0" class="token-input" style="width:120px"></td>
+        <td><input type="number" id="pr-out-${safeId}" value="${p.output_multiplier}" step="0.1" min="0" class="token-input" style="width:120px"></td>
+        <td style="white-space:nowrap">
+          <button class="btn on" onclick="savePricingRow('${escapeAttr(model)}','${safeId}')">Save</button>
+          ${isDefault ? '' : `<button class="btn" onclick="deletePricingRow('${escapeAttr(model)}')">Delete</button>`}
+        </td>
+      </tr>`;
+    }).join('');
+    tbody.innerHTML = html || '<tr><td colspan="4" style="text-align:center;color:var(--text-4)">no pricing entries</td></tr>';
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="4" style="color:var(--c-red);text-align:center">${escapeHTML(e.message)}</td></tr>`; }
+}
+
+async function savePricingRow(model, safeId) {
+  const input_multiplier = Number(document.getElementById(`pr-in-${safeId}`).value);
+  const output_multiplier = Number(document.getElementById(`pr-out-${safeId}`).value);
+  const r = await fetch(`/admin/pricing/${encodeURIComponent(model)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ input_multiplier, output_multiplier }) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert('save failed: ' + (j.error || r.status)); return; }
+  loadPricing();
+}
+
+async function deletePricingRow(model) {
+  if (!confirm(`Delete pricing for "${model}"? Unknown models fall back to _default.`)) return;
+  const r = await fetch(`/admin/pricing/${encodeURIComponent(model)}`, { method: 'DELETE', credentials: 'include' });
+  if (!r.ok) { alert('delete failed: HTTP ' + r.status); return; }
+  loadPricing();
+}
+
+async function addPricingRow() {
+  const model = document.getElementById('pr-add-model').value.trim();
+  if (!model) { alert('model id required'); return; }
+  const input_multiplier = Number(document.getElementById('pr-add-in').value);
+  const output_multiplier = Number(document.getElementById('pr-add-out').value);
+  const r = await fetch('/admin/pricing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model, input_multiplier, output_multiplier }) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert('add failed: ' + (j.error || r.status)); return; }
+  document.getElementById('pr-add-model').value = '';
+  loadPricing();
+}
+
+async function reloadPricingFile() {
+  const r = await fetch('/admin/pricing/reload', { method: 'POST', credentials: 'include' });
+  if (!r.ok) { alert('reload failed: HTTP ' + r.status); return; }
+  loadPricing();
+}
+
+// ─── Audit tab ──────────────────────────────────────────────────────────────
+let auditData = [];
+async function loadAudit() {
+  const tbody = document.getElementById('audit-body');
+  if (!tbody) return;
+  try {
+    const r = await fetch('/admin/audit?limit=500', { credentials: 'include' });
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--c-red);text-align:center">HTTP ${r.status}</td></tr>`; return; }
+    const { actions } = await r.json();
+    auditData = actions || [];
+    renderAudit();
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--c-red);text-align:center">${escapeHTML(e.message)}</td></tr>`; }
+}
+
+function renderAudit() {
+  const tbody = document.getElementById('audit-body');
+  if (!tbody) return;
+  const f = (document.getElementById('audit-filter')?.value || '').trim().toLowerCase();
+  const rows = auditData.filter(a => {
+    if (!f) return true;
+    return [a.action, a.target, a.admin_name, a.payload].some(x => (x || '').toString().toLowerCase().includes(f));
+  });
+  setText('audit-count', `${rows.length} / ${auditData.length}`);
+  tbody.innerHTML = rows.map(a => `<tr>
+    <td style="font-size:11px">${escapeHTML(a.ts || '')}</td>
+    <td>${escapeHTML(a.admin_name || '-')}</td>
+    <td><code style="color:var(--accent-bright);font-size:11px">${escapeHTML(a.action || '')}</code></td>
+    <td style="font-size:11px;font-family:monospace">${escapeHTML((a.target || '-').slice(0, 40))}${a.target && a.target.length > 40 ? '…' : ''}</td>
+    <td style="font-size:11px;color:var(--text-3)"><code style="word-break:break-all">${escapeHTML(a.payload || '')}</code></td>
+  </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-4)">no audit entries</td></tr>';
 }
