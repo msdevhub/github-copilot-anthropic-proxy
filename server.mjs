@@ -11,7 +11,7 @@ import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_
 import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
-import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession } from "./lib/auth.mjs";
+import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession, checkUserSession, createUserSession, destroyUserSession } from "./lib/auth.mjs";
 import { db, addLog } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey } from "./lib/keys-v2.mjs";
@@ -144,6 +144,58 @@ async function handleRequest(req, res) {
     destroyDashboardSession(req);
     res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": "dash_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── User session (Stage 3): API-key login ────────────────────────────────
+  if (req.method === "POST" && req.url === "/user/login") {
+    const body = await readJsonBody(req);
+    const raw = (body && body.apiKey) ? String(body.apiKey).trim() : "";
+    if (!raw) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "apiKey is required" }));
+      return;
+    }
+    const row = getKeyByHash(hashKey(raw));
+    if (!row || row.status === "disabled") {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid or disabled key" }));
+      return;
+    }
+    const tok = createUserSession(row.key_hash);
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Set-Cookie": `user_session=${tok}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
+    });
+    res.end(JSON.stringify({ ok: true, name: row.name, role: row.role }));
+    return;
+  }
+  if (req.method === "POST" && req.url === "/user/logout") {
+    destroyUserSession(req);
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Set-Cookie": "user_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+    });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // GET /user — serve user dashboard HTML
+  if (req.method === "GET" && (pathname === "/user" || pathname === "/user/" || pathname === "/user/index.html")) {
+    try {
+      const html = readFileSync(join(PUBLIC_DIR, "user-dashboard.html"), "utf8").replace("__PORT__", PORT);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+    }
+    return;
+  }
+
+  // ── User API (Stage 3): /user/* requires user_session OR admin session ───
+  if (req.url.startsWith("/user/") && req.url !== "/user/login" && req.url !== "/user/logout") {
+    await handleUserApi(req, res);
     return;
   }
 
@@ -985,6 +1037,114 @@ async function handleAdmin(req, res) {
   // POST /admin/pricing/reload
   if (req.method === "POST" && path === "/admin/pricing/reload") {
     return send(200, { pricing: reloadPricing() });
+  }
+
+  return send(404, { error: "not found" });
+}
+
+// ─── /user/* (Stage 3) — per-user self-service API ───────────────────────────
+async function handleUserApi(req, res) {
+  const send = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+  // Resolve who's calling. Admin dashboard session sees all keys (admin view);
+  // user_session sees only its own. Anything else is unauthorized.
+  let scopeHash = null;     // null = unrestricted (admin)
+  let viewerKey = null;     // key row for /user/me (when scoped)
+  if (checkDashboardSession(req)) {
+    scopeHash = null;
+    // For /user/me with admin session, surface the dashboard session as a virtual admin row
+    // (so the page renders something sensible); allow ?key_hash=... override.
+  } else {
+    const h = checkUserSession(req);
+    if (!h) return send(401, { error: "unauthorized — POST /user/login first" });
+    viewerKey = getKeyByHash(h);
+    if (!viewerKey || viewerKey.status === "disabled") return send(401, { error: "session key disabled or missing" });
+    scopeHash = h;
+  }
+
+  const url = new URL(req.url, "http://localhost");
+  const path = url.pathname;
+
+  // GET /user/me
+  if (req.method === "GET" && path === "/user/me") {
+    const row = viewerKey || (scopeHash === null ? null : getKeyByHash(scopeHash));
+    if (!row) {
+      return send(200, {
+        name: "(admin)", role: "admin", key_prefix: null,
+        free_quota: 0, free_used: 0, free_reset_at: null,
+        balance_tokens: 0, unlimited: true, status: "active", allowed_models: null,
+        is_admin_view: true,
+      });
+    }
+    let allowed = null;
+    if (row.allowed_models) { try { allowed = JSON.parse(row.allowed_models); } catch {} }
+    return send(200, {
+      name: row.name,
+      role: row.role,
+      key_prefix: row.key_prefix,
+      free_quota: row.free_quota,
+      free_used: row.free_used,
+      free_reset_at: row.free_reset_at,
+      balance_tokens: row.balance_tokens,
+      unlimited: !!row.unlimited,
+      status: row.status,
+      allowed_models: allowed,
+      created_at: row.created_at,
+      last_used_at: row.last_used_at,
+    });
+  }
+
+  // GET /user/logs?limit=&offset=&since_id=&from=&to=&model=
+  if (req.method === "GET" && path === "/user/logs") {
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "50", 10), 1000);
+    const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0", 10));
+    const sinceId = parseInt(url.searchParams.get("since_id") || "0", 10);
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
+    const model = url.searchParams.get("model");
+
+    const where = [], params = [];
+    if (scopeHash) { where.push("key_hash = ?"); params.push(scopeHash); }
+    if (from) { where.push("ts >= ?"); params.push(from); }
+    if (to) { where.push("ts <= ?"); params.push(to); }
+    if (model) { where.push("model = ?"); params.push(model); }
+    if (sinceId > 0) { where.push("id > ?"); params.push(sinceId); }
+    const wc = where.length ? "WHERE " + where.join(" AND ") : "";
+    const logs = db.prepare(`SELECT id, ts, model, status, duration_ms, stream, input_tokens, output_tokens, preview, request_summary, error FROM logs ${wc} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, sinceId > 0 ? 0 : offset);
+    return send(200, { logs });
+  }
+
+  // GET /user/usage?from=&to=  → aggregate from usage_ledger
+  if (req.method === "GET" && path === "/user/usage") {
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
+    const where = [], params = [];
+    if (scopeHash) { where.push("key_hash = ?"); params.push(scopeHash); }
+    if (from) { where.push("ts >= ?"); params.push(from); }
+    if (to) { where.push("ts <= ?"); params.push(to); }
+    const wc = where.length ? "WHERE " + where.join(" AND ") : "";
+    const byModel = db.prepare(`SELECT model, COUNT(*) as count, COALESCE(SUM(input_tokens),0) as input, COALESCE(SUM(output_tokens),0) as output, COALESCE(SUM(cost_tokens),0) as cost FROM usage_ledger ${wc} GROUP BY model ORDER BY cost DESC`).all(...params);
+    const byDay = db.prepare(`SELECT substr(ts,1,10) as day, COUNT(*) as count, COALESCE(SUM(cost_tokens),0) as cost FROM usage_ledger ${wc} GROUP BY day ORDER BY day`).all(...params);
+    const total = db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(input_tokens),0) as input, COALESCE(SUM(output_tokens),0) as output, COALESCE(SUM(cost_tokens),0) as cost FROM usage_ledger ${wc}`).get(...params);
+    return send(200, { byModel, byDay, total });
+  }
+
+  // GET /user/stats → hourly + modelShare (logs-based, scoped)
+  if (req.method === "GET" && path === "/user/stats") {
+    const where = scopeHash ? "WHERE key_hash = ?" : "";
+    const params = scopeHash ? [scopeHash] : [];
+    const hourly = db.prepare(`
+      SELECT substr(ts,1,13) as slot,
+        COUNT(*) as total,
+        SUM(CASE WHEN status < 400 THEN 1 ELSE 0 END) as ok,
+        SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as err,
+        COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+      FROM logs ${where} GROUP BY slot ORDER BY slot
+    `).all(...params);
+    const modelRows = db.prepare(`SELECT model, COUNT(*) as count FROM logs ${where} GROUP BY model ORDER BY count DESC`).all(...params);
+    const total = modelRows.reduce((s, r) => s + r.count, 0);
+    const modelShare = modelRows.map(r => ({ model: r.model, count: r.count, pct: total ? Math.round(r.count * 100 / total) : 0 }));
+    return send(200, { hourly, modelShare });
   }
 
   return send(404, { error: "not found" });
