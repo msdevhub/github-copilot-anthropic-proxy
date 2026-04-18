@@ -159,8 +159,32 @@ async function handleRequest(req, res) {
       model: r.model, count: r.count, pct: totalCount ? Math.round(r.count * 100 / totalCount) : 0
     }));
 
+    const apiKeyRows = db.prepare(`
+      SELECT COALESCE(api_key_name, '(none)') as name,
+        COUNT(*) as count,
+        COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+      FROM logs GROUP BY api_key_name ORDER BY count DESC
+    `).all();
+    const apiKeyTotal = apiKeyRows.reduce((s, r) => s + r.count, 0);
+    const apiKeyShare = apiKeyRows.map(r => ({
+      name: r.name, count: r.count, tokens: r.tokens,
+      pct: apiKeyTotal ? Math.round(r.count * 100 / apiKeyTotal) : 0
+    }));
+
+    const tokenRows = db.prepare(`
+      SELECT COALESCE(token_name, '(none)') as name,
+        COUNT(*) as count,
+        COALESCE(SUM(input_tokens + output_tokens), 0) as tokens
+      FROM logs GROUP BY token_name ORDER BY count DESC
+    `).all();
+    const tokenTotal = tokenRows.reduce((s, r) => s + r.count, 0);
+    const tokenShare = tokenRows.map(r => ({
+      name: r.name, count: r.count, tokens: r.tokens,
+      pct: tokenTotal ? Math.round(r.count * 100 / tokenTotal) : 0
+    }));
+
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ hourly, modelShare }));
+    res.end(JSON.stringify({ hourly, modelShare, apiKeyShare, tokenShare }));
     return;
   }
 
@@ -188,7 +212,9 @@ async function handleRequest(req, res) {
     const from = url.searchParams.get("from");
     const to = url.searchParams.get("to");
     const model = url.searchParams.get("model");
-    const limit = Math.min(parseInt(url.searchParams.get("limit") || "200", 10), 1000);
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "50", 10), 1000);
+    const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0", 10));
+    const sinceId = parseInt(url.searchParams.get("since_id") || "0", 10);
 
     let where = [], params = [];
     if (from) { where.push("ts >= ?"); params.push(from); }
@@ -197,9 +223,17 @@ async function handleRequest(req, res) {
     const tokenNameFilter = url.searchParams.get("token_name");
     if (tokenNameFilter) { where.push("token_name = ?"); params.push(tokenNameFilter); }
     if (url.searchParams.get("errors_only") === "1") { where.push("(status >= 400 OR error IS NOT NULL)"); }
+    if (sinceId > 0) { where.push("id > ?"); params.push(sinceId); }
     const whereClause = where.length ? "WHERE " + where.join(" AND ") : "";
 
-    const logs = db.prepare(`SELECT id, ts, model, status, duration_ms, stream, input_tokens, output_tokens, preview, request_summary, error, token_name, api_key_name FROM logs ${whereClause} ORDER BY id DESC LIMIT ?`).all(...params, limit);
+    const logs = db.prepare(`SELECT id, ts, model, status, duration_ms, stream, input_tokens, output_tokens, preview, request_summary, error, token_name, api_key_name FROM logs ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, sinceId > 0 ? 0 : offset);
+
+    // Skip expensive aggregate queries on incremental polls — stats are computed over the whole table.
+    if (sinceId > 0) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ logs }));
+      return;
+    }
 
     const statsRow = db.prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN status < 400 THEN 1 ELSE 0 END) as ok, SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as err, COALESCE(SUM(input_tokens + output_tokens), 0) as tokens, COALESCE(CAST(AVG(CASE WHEN duration_ms > 0 THEN duration_ms END) AS INTEGER), 0) as avgMs FROM logs ${whereClause}`).get(...params);
 
@@ -574,6 +608,8 @@ async function handleRequest(req, res) {
         { id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4", created_at: "2025-05-14" },
         { id: "claude-haiku-3-5-20241022", display_name: "Claude 3.5 Haiku", created_at: "2024-10-22" },
         { id: "claude-opus-4-20250514", display_name: "Claude Opus 4", created_at: "2025-05-14" },
+        { id: "claude-opus-4-7-20250715", display_name: "Claude Opus 4.7", created_at: "2025-07-15" },
+        { id: "claude-opus-4-7", display_name: "Claude Opus 4.7", created_at: "2025-07-15" },
       ]
     }));
     return;
@@ -639,8 +675,6 @@ async function handleRequest(req, res) {
     try { parsed = JSON.parse(body.toString()); } catch { parsed = null; }
 
     if (parsed) {
-      // Default max_tokens to 5000 if not provided
-      if (!parsed.max_tokens) parsed.max_tokens = 5000;
 
       // Remap claude-opus-4.6 variants to the 1M context version
       if (parsed.model && /^claude-opus-4[.\-]6/i.test(parsed.model) && parsed.model !== 'claude-opus-4.6-1m') {

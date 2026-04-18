@@ -1,6 +1,52 @@
 let autoRefresh = true, timer, filters = {};
 let currentTab = 'logs';
 
+// ─── Auto-refresh session on 401 ──────────────────────────────────────────
+// The dashboard session cookie is in-memory on the server; if the server
+// restarts or the 24h cookie expires while the Logto SSO is still valid,
+// we re-create the session cookie transparently and retry once.
+(function installFetchAuthInterceptor() {
+  const _fetch = window.fetch.bind(window);
+  let refreshing = null;
+  async function refreshSession() {
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      try {
+        const client = window._logtoClient;
+        if (client && await client.isAuthenticated()) {
+          await _fetch('/api/__auth/session', { method: 'POST', credentials: 'same-origin' });
+          return true;
+        }
+      } catch (e) { console.warn('session refresh failed', e); }
+      return false;
+    })().finally(() => { refreshing = null; });
+    return refreshing;
+  }
+  window.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    const res = await _fetch(input, init);
+    if (res.status === 401 && url && url.startsWith('/api/') && !url.startsWith('/api/__auth/')) {
+      const ok = await refreshSession();
+      if (ok) return _fetch(input, init);
+      // Re-auth failed → bounce to login
+      window.location.reload();
+    }
+    return res;
+  };
+})();
+
+
+// Infinite scroll state
+let logsData = [];         // all rows loaded so far
+let logsOffset = 0;        // current offset
+const LOGS_PAGE = 100;     // rows per page (kept small; live refresh reloads page 0 every 2s)
+let logsLoading = false;
+let logsExhausted = false;
+
+// Sort state
+let sortCol = null;
+let sortDir = 'asc';       // 'asc' | 'desc'
+
 // ---- Tab switching ----
 function switchMainTab(tab) {
   currentTab = tab;
@@ -32,7 +78,7 @@ function applyFilter() {
   filters.to = document.getElementById('f-to').value || undefined;
   filters.model = document.getElementById('f-model').value || undefined;
   filters.token_name = document.getElementById('f-token').value || undefined;
-  refresh();
+  fullRefresh();
 }
 
 function clearFilter() {
@@ -41,7 +87,7 @@ function clearFilter() {
   document.getElementById('f-to').value = '';
   document.getElementById('f-model').value = '';
   document.getElementById('f-token').value = '';
-  refresh();
+  fullRefresh();
 }
 
 function fmt(n) {
@@ -127,9 +173,207 @@ async function refresh() {
   }).join('');
 }
 
-function toggleDetail(i) {
-  // legacy, kept for compat
+// renderLogsTable: render logsData into the tbody (isFirst = replace, else append)
+function renderLogsTable(isFirst) {
+  const tbody = document.getElementById('log-body');
+
+  if (isFirst && !logsData.length) {
+    tbody.innerHTML = `<tr><td colspan="9">
+      <div class="empty-wrap">
+        <div class="empty-ring"></div>
+        <div class="empty-text">No requests yet</div>
+        <div class="empty-sub">Requests to /v1/messages will appear here</div>
+      </div>
+    </td></tr>`;
+    return;
+  }
+
+  const rows = getSortedData(logsData);
+  const html = rows.map(l => rowHTML(l)).join('');
+  tbody.innerHTML = html;
+
+  // Load more button
+  const existing = document.getElementById('load-more-row');
+  if (existing) existing.remove();
+  if (!logsExhausted) {
+    const btn = document.createElement('div');
+    btn.id = 'load-more-row';
+    btn.className = 'load-more-btn';
+    btn.textContent = `Load More (${logsData.length} loaded)`;
+    btn.onclick = () => loadLogsPage(false);
+    document.getElementById('tbl-container').appendChild(btn);
+  }
 }
+
+function rowHTML(l) {
+  const sc = l.status < 400 ? 'ok' : 'err';
+  const badge = l.stream
+    ? '<span class="badge b-stream">SSE</span>'
+    : '<span class="badge b-sync">Sync</span>';
+  const tok = (l.input_tokens || l.output_tokens)
+    ? `${fmt(l.input_tokens)}<span style="color:var(--text-4);margin:0 2px">&rarr;</span>${fmt(l.output_tokens)}`
+    : '<span style="color:var(--text-4)">-</span>';
+  const preview = l.error || l.preview || '';
+  const previewClass = l.error ? 'c-error' : 'c-preview';
+  return `<tr onclick="openDetail(${l.id})">
+    <td class="c-ts">${l.ts || ''}</td>
+    <td class="c-token">${esc(l.token_name || '-')}</td>
+    <td class="c-token">${esc(l.api_key_name || '-')}</td>
+    <td class="c-model">${esc(l.model || '-')}</td>
+    <td><span class="c-status ${sc}">${l.status}</span></td>
+    <td class="c-dur">${l.duration_ms ? l.duration_ms + 'ms' : '-'}</td>
+    <td class="c-tok">${tok}</td>
+    <td>${badge}</td>
+    <td class="${previewClass}">${esc(preview)}</td>
+  </tr>`;
+}
+
+// ---- Sort ----
+function getSortedData(data) {
+  if (!sortCol) return data;
+  const dir = sortDir === 'asc' ? 1 : -1;
+  return [...data].sort((a, b) => {
+    let av = sortCol === 'tokens' ? ((a.input_tokens || 0) + (a.output_tokens || 0)) : a[sortCol];
+    let bv = sortCol === 'tokens' ? ((b.input_tokens || 0) + (b.output_tokens || 0)) : b[sortCol];
+    if (av == null) av = '';
+    if (bv == null) bv = '';
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+    return String(av).localeCompare(String(bv)) * dir;
+  });
+}
+
+function sortTable(col) {
+  if (sortCol === col) {
+    sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortCol = col;
+    sortDir = 'asc';
+  }
+  // Update sort arrow indicators
+  document.querySelectorAll('.sort-arrow').forEach(el => {
+    el.textContent = '';
+    el.classList.remove('sa-asc', 'sa-desc');
+  });
+  const arrow = document.querySelector(`.sort-arrow[data-col="${col}"]`);
+  if (arrow) {
+    arrow.textContent = sortDir === 'asc' ? ' ▲' : ' ▼';
+    arrow.classList.add(sortDir === 'asc' ? 'sa-asc' : 'sa-desc');
+  }
+  renderLogsTable(true);
+}
+
+async function refresh() {
+  // Live incremental poll: if we already have data, only fetch rows with id > max,
+  // prepend them, and bump counters locally. No aggregate queries on the server.
+  if (logsData.length > 0 && !logsLoading) {
+    const sinceId = logsData[0]?.id || 0;
+    const params = new URLSearchParams();
+    if (filters.from) params.set('from', filters.from.replace('T', ' '));
+    if (filters.to) params.set('to', filters.to.replace('T', ' '));
+    if (filters.model) params.set('model', filters.model);
+    if (filters.token_name) params.set('token_name', filters.token_name);
+    if (document.getElementById('show-errors').checked) params.set('errors_only', '1');
+    params.set('since_id', String(sinceId));
+    params.set('limit', '500');
+    try {
+      const r = await fetch('/api/logs?' + params);
+      const { logs: newRows } = await r.json();
+      if (newRows && newRows.length) {
+        // newRows ordered by id DESC → prepend
+        logsData = newRows.concat(logsData);
+        // Bump stat counters locally
+        let addTotal = 0, addOk = 0, addErr = 0, addTokens = 0;
+        for (const l of newRows) {
+          addTotal++;
+          if (l.status < 400) addOk++; else addErr++;
+          addTokens += (l.input_tokens || 0) + (l.output_tokens || 0);
+        }
+        bumpStat('s-total', addTotal);
+        bumpStat('s-ok', addOk);
+        bumpStat('s-err', addErr);
+        bumpStat('s-tokens', addTokens);
+        renderLogsTable(true);
+      }
+    } catch (e) { /* swallow */ }
+    return;
+  }
+  // No data yet → full load
+  await fullRefresh();
+}
+
+async function fullRefresh() {
+  logsOffset = 0;
+  logsData = [];
+  logsExhausted = false;
+  await loadLogsPage(true);
+}
+
+// Read numeric stat (handles K/M format), add delta, write back formatted.
+const _statRaw = { 's-total': 0, 's-ok': 0, 's-err': 0, 's-tokens': 0 };
+function bumpStat(id, delta) {
+  if (!delta) return;
+  _statRaw[id] = (_statRaw[id] || 0) + delta;
+  document.getElementById(id).textContent = fmt(_statRaw[id]);
+}
+
+async function loadLogsPage(isFirst) {
+  if (logsLoading || logsExhausted) return;
+  logsLoading = true;
+
+  const params = new URLSearchParams();
+  if (filters.from) params.set('from', filters.from.replace('T', ' '));
+  if (filters.to) params.set('to', filters.to.replace('T', ' '));
+  if (filters.model) params.set('model', filters.model);
+  if (filters.token_name) params.set('token_name', filters.token_name);
+  if (document.getElementById('show-errors').checked) params.set('errors_only', '1');
+  params.set('limit', String(LOGS_PAGE));
+  params.set('offset', String(logsOffset));
+
+  try {
+    const r = await fetch('/api/logs?' + params);
+    const { logs: data, stats, modelStats } = await r.json();
+
+    if (isFirst) {
+      _statRaw['s-total'] = stats.total || 0;
+      _statRaw['s-ok'] = stats.ok || 0;
+      _statRaw['s-err'] = stats.err || 0;
+      _statRaw['s-tokens'] = stats.tokens || 0;
+      document.getElementById('s-total').textContent = fmt(stats.total);
+      document.getElementById('s-ok').textContent = fmt(stats.ok);
+      document.getElementById('s-err').textContent = fmt(stats.err);
+      document.getElementById('s-tokens').textContent = fmt(stats.tokens);
+      document.getElementById('s-avg').textContent = (stats.avgMs || 0) + 'ms';
+
+      // model pills
+      const ms = document.getElementById('model-stats');
+      ms.innerHTML = (modelStats || []).map(m =>
+        `<div class="mpill">
+          <span class="mpill-dot"></span>
+          <span class="mpill-name">${esc(m.model)}</span>
+          <span class="mpill-meta">${m.count}x &middot; ${fmt(m.tokens)} tok &middot; ${m.avgMs}ms</span>
+        </div>`
+      ).join('');
+
+      // model filter
+      const sel = document.getElementById('f-model');
+      const cur = sel.value;
+      if (modelStats?.length) {
+        sel.innerHTML = '<option value="">All models</option>' +
+          modelStats.map(m => `<option value="${esc(m.model)}"${cur === m.model ? ' selected' : ''}>${esc(m.model)}</option>`).join('');
+      }
+    }
+
+    if (data.length < LOGS_PAGE) logsExhausted = true;
+    logsOffset += data.length;
+    logsData = isFirst ? data : logsData.concat(data);
+
+    renderLogsTable(isFirst);
+  } finally {
+    logsLoading = false;
+  }
+}
+
+
 
 // --- Detail Drawer ---
 let drawerCache = {};
@@ -452,11 +696,30 @@ function drawModelShare(data) {
   }).join('');
 }
 
+function drawNamedShare(data, elId, nameKey) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!data.length) { el.innerHTML = '<span style="color:var(--text-4);font-size:11px">No data</span>'; return; }
+  el.innerHTML = data.slice(0, 7).map((m, i) => {
+    const color = MODEL_COLORS[i % MODEL_COLORS.length];
+    const tokens = m.tokens ? ` &middot; ${fmt(m.tokens)} tok` : '';
+    return `<div class="share-item">
+      <div class="share-row">
+        <span class="share-name">${esc(m[nameKey] || m.name || 'unknown')}</span>
+        <span class="share-pct">${m.pct}% (${fmt(m.count)}${tokens})</span>
+      </div>
+      <div class="share-track">
+        <div class="share-fill" style="width:${m.pct}%;background:${color}"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 let chartLoaded = false;
 async function loadCharts() {
   try {
     const r = await fetch('/api/stats/charts');
-    const { hourly, modelShare } = await r.json();
+    const { hourly, modelShare, apiKeyShare, tokenShare } = await r.json();
 
     if (hourly.length) {
       const map = new Map(hourly.map(h => [h.slot, h]));
@@ -480,6 +743,8 @@ async function loadCharts() {
     }
 
     drawModelShare(modelShare);
+    drawNamedShare(apiKeyShare, 'chart-apikeys', 'name');
+    drawNamedShare(tokenShare, 'chart-tokens', 'name');
     chartLoaded = true;
   } catch (e) { console.warn('chart load failed', e); }
 }

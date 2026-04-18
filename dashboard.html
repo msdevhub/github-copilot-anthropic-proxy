@@ -99,17 +99,17 @@
       </div>
     </div>
 
-    <div class="tbl-container">
+    <div class="tbl-container" id="tbl-container">
       <table class="tbl">
         <thead>
           <tr>
-            <th>Time</th>
-            <th>Token</th>
-            <th>API Key</th>
-            <th>Model</th>
-            <th>Status</th>
-            <th>Latency</th>
-            <th>Tokens</th>
+            <th onclick="sortTable('ts')">Time <span class="sort-arrow" data-col="ts"></span></th>
+            <th onclick="sortTable('token_name')">Token <span class="sort-arrow" data-col="token_name"></span></th>
+            <th onclick="sortTable('api_key_name')">API Key <span class="sort-arrow" data-col="api_key_name"></span></th>
+            <th onclick="sortTable('model')">Model <span class="sort-arrow" data-col="model"></span></th>
+            <th onclick="sortTable('status')">Status <span class="sort-arrow" data-col="status"></span></th>
+            <th onclick="sortTable('duration_ms')">Latency <span class="sort-arrow" data-col="duration_ms"></span></th>
+            <th onclick="sortTable('tokens')">Tokens <span class="sort-arrow" data-col="tokens"></span></th>
             <th>Type</th>
             <th style="width:100%">Preview</th>
           </tr>
@@ -197,6 +197,17 @@
       <div class="chart-card">
         <div class="chart-title">Model Share</div>
         <div class="share-list" id="chart-models"></div>
+      </div>
+    </div>
+
+    <div class="charts charts-2col">
+      <div class="chart-card">
+        <div class="chart-title">API Key Usage</div>
+        <div class="share-list" id="chart-apikeys"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Token Usage</div>
+        <div class="share-list" id="chart-tokens"></div>
       </div>
     </div>
 

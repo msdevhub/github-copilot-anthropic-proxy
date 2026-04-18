@@ -250,7 +250,23 @@ body::before {
 /* ---- table ---- */
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
 
-.tbl thead { position: sticky; top: 96px; z-index: 10; }
+.tbl-container {
+  overflow-x: auto;
+}
+
+.tbl thead { position: sticky; top: 0; z-index: 10; }
+
+.load-more-btn {
+  text-align: center;
+  padding: 14px;
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.load-more-btn:hover { background: var(--accent-glow); }
 
 .tbl th {
   text-align: left;
@@ -265,6 +281,11 @@ body::before {
 }
 .tbl th:first-child { border-radius: 8px 0 0 0; }
 .tbl th:last-child { border-radius: 0 8px 0 0; }
+
+/* sortable column headers */
+.tbl th[onclick] { cursor: pointer; user-select: none; }
+.tbl th[onclick]:hover { color: var(--text-2); background: var(--bg-3); }
+.sort-arrow { font-size: 9px; color: var(--accent-bright); }
 
 .tbl td {
   padding: 10px 14px;
@@ -1036,6 +1057,16 @@ input[type="checkbox"] {
   border-radius: 10px;
   overflow: hidden;
   margin-bottom: 20px;
+}
+
+.charts.charts-2col {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 768px) {
+  .charts, .charts.charts-2col {
+    grid-template-columns: 1fr;
+  }
 }
 
 .chart-card {
