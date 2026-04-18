@@ -58,6 +58,7 @@ function switchMainTab(tab) {
   });
   if (tab === 'charts' && !chartLoaded) loadCharts();
   if (tab === 'settings') { loadTokenData(); loadApiKeys(); }
+  if (tab === 'keys') { v2LoadKeys(); }
 }
 
 function toggleAuto() {
@@ -1337,3 +1338,101 @@ switchMainTab = function(tab) {
     }
   }, 100);
 };
+
+// ─── v2 Keys tab (Stage 2: quota + balance) ─────────────────────────────────
+async function v2LoadKeys() {
+  const el = document.getElementById('v2-keys-list');
+  if (!el) return;
+  el.innerHTML = 'Loading...';
+  try {
+    const r = await fetch('/admin/keys', { credentials: 'include' });
+    if (!r.ok) { el.innerHTML = '<div style="color:var(--c-red)">load failed: HTTP ' + r.status + '</div>'; return; }
+    const { keys } = await r.json();
+    if (!keys.length) { el.innerHTML = '<div style="color:var(--text-4)">no keys yet</div>'; return; }
+    const rows = keys.map(k => `
+      <tr>
+        <td>${escapeHTML(k.name || '-')}</td>
+        <td><code style="font-size:11px">${escapeHTML(k.key_prefix || '')}…</code></td>
+        <td>${k.role}</td>
+        <td>${k.unlimited ? '<span style="color:var(--accent-bright)">unlimited</span>' : `${fmt(k.free_used)} / ${fmt(k.free_quota)}`}</td>
+        <td>${fmt(k.balance_tokens)}</td>
+        <td><span style="color:${k.status === 'active' ? 'var(--c-green)' : 'var(--c-red)'}">${k.status}</span></td>
+        <td style="font-size:11px;color:var(--text-4)">${k.last_used_at || '-'}</td>
+        <td style="white-space:nowrap">
+          <button class="btn" onclick="v2Topup('${k.key_hash}','${escapeHTML(k.name || '')}')">Topup</button>
+          <button class="btn" onclick="v2EditQuota('${k.key_hash}', ${k.free_quota})">Quota</button>
+          <button class="btn" onclick="v2ResetFree('${k.key_hash}')">Reset</button>
+          <button class="btn" onclick="v2Disable('${k.key_hash}')">Disable</button>
+        </td>
+      </tr>`).join('');
+    el.innerHTML = `
+      <table class="tbl" style="width:100%">
+        <thead><tr>
+          <th>Name</th><th>Key</th><th>Role</th><th>Free used / quota</th><th>Balance</th><th>Status</th><th>Last used</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--c-red)">' + escapeHTML(e.message) + '</div>';
+  }
+}
+
+function escapeHTML(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+async function v2CreateKey() {
+  const body = {
+    name: document.getElementById('v2-add-name').value.trim(),
+    role: document.getElementById('v2-add-role').value,
+    free_quota: Number(document.getElementById('v2-add-free').value) || 0,
+    balance_tokens: Number(document.getElementById('v2-add-balance').value) || 0,
+    unlimited: document.getElementById('v2-add-unlimited').value === '1',
+  };
+  if (!body.name) { alert('name required'); return; }
+  const r = await fetch('/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) { alert('create failed: ' + (j.error || r.status)); return; }
+  const banner = document.getElementById('v2-new-key-banner');
+  document.getElementById('v2-new-key-value').textContent = j.key;
+  banner.style.display = 'block';
+  document.getElementById('v2-add-name').value = '';
+  v2LoadKeys();
+}
+
+function v2CopyNewKey() {
+  const v = document.getElementById('v2-new-key-value').textContent;
+  navigator.clipboard.writeText(v).then(() => { /* ok */ }, () => alert('copy failed'));
+}
+
+async function v2Topup(hash, name) {
+  const v = prompt(`Top up "${name}" — tokens to add:`, '10000');
+  if (!v) return;
+  const tokens = Number(v);
+  if (!Number.isFinite(tokens) || tokens <= 0) { alert('invalid amount'); return; }
+  const r = await fetch(`/admin/keys/${hash}/topup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ tokens }) });
+  if (!r.ok) { alert('topup failed: HTTP ' + r.status); return; }
+  v2LoadKeys();
+}
+
+async function v2EditQuota(hash, current) {
+  const v = prompt('New free monthly quota:', String(current));
+  if (v === null) return;
+  const free_quota = Number(v);
+  if (!Number.isFinite(free_quota) || free_quota < 0) { alert('invalid'); return; }
+  const r = await fetch(`/admin/keys/${hash}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ free_quota }) });
+  if (!r.ok) { alert('update failed: HTTP ' + r.status); return; }
+  v2LoadKeys();
+}
+
+async function v2ResetFree(hash) {
+  if (!confirm('Reset free_used to 0?')) return;
+  const r = await fetch(`/admin/keys/${hash}/reset-free`, { method: 'POST', credentials: 'include' });
+  if (!r.ok) { alert('reset failed: HTTP ' + r.status); return; }
+  v2LoadKeys();
+}
+
+async function v2Disable(hash) {
+  if (!confirm('Disable this key? It will be rejected on subsequent requests.')) return;
+  const r = await fetch(`/admin/keys/${hash}`, { method: 'DELETE', credentials: 'include' });
+  if (!r.ok) { alert('disable failed: HTTP ' + r.status); return; }
+  v2LoadKeys();
+}

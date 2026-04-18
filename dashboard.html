@@ -50,6 +50,7 @@
 <div class="top-tabs">
   <div class="top-tab active" data-tab="logs" onclick="switchMainTab('logs')">Logs</div>
   <div class="top-tab" data-tab="settings" onclick="switchMainTab('settings')">Settings</div>
+  <div class="top-tab" data-tab="keys" onclick="switchMainTab('keys')">Keys</div>
   <div class="top-tab" data-tab="charts" onclick="switchMainTab('charts')">Charts</div>
 </div>
 
@@ -182,6 +183,57 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- ==================== TAB: KEYS (v2 — quota / billing) ==================== -->
+  <div class="tab-content" id="tab-keys">
+    <div class="settings-card">
+      <div class="settings-card-title">API Keys (v2 — quota & balance)</div>
+      <div style="color:var(--text-4);font-size:11px;margin-bottom:12px">
+        Keys here track per-month free quota and a token balance. The first time a key is created the raw value is shown — copy it then.
+      </div>
+      <div id="v2-keys-list">Loading...</div>
+      <div class="token-add-row" style="flex-wrap:wrap;gap:8px;margin-top:12px">
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:160px;flex:1">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Name</label>
+          <input type="text" class="token-input" id="v2-add-name" placeholder="e.g. friend-laptop" style="width:100%">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;width:120px">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Role</label>
+          <select class="token-input" id="v2-add-role" style="width:100%">
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;width:130px" title="Free monthly quota in equivalent tokens.">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Free quota</label>
+          <input type="number" class="token-input" id="v2-add-free" value="10000" min="0" style="width:100%">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;width:130px" title="Initial pre-paid balance in equivalent tokens.">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Balance</label>
+          <input type="number" class="token-input" id="v2-add-balance" value="0" min="0" style="width:100%">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;width:110px">
+          <label style="font-size:10px;color:var(--text-4);font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Unlimited</label>
+          <select class="token-input" id="v2-add-unlimited" style="width:100%">
+            <option value="0">no</option>
+            <option value="1">yes</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;justify-content:flex-end">
+          <label style="font-size:10px;color:transparent">&nbsp;</label>
+          <button class="btn" onclick="v2CreateKey()">Create</button>
+        </div>
+      </div>
+      <div id="v2-new-key-banner" style="display:none;margin-top:12px;padding:10px 12px;border:1px solid var(--accent-bright);border-radius:6px;background:rgba(80,150,255,.08)">
+        <div style="font-size:11px;color:var(--text-4);margin-bottom:4px">New raw key — copy now, it won't be shown again</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <code id="v2-new-key-value" style="flex:1;padding:6px 8px;background:rgba(0,0,0,.25);border-radius:4px;font-size:12px;word-break:break-all"></code>
+          <button class="btn" onclick="v2CopyNewKey()">Copy</button>
+          <button class="btn" onclick="document.getElementById('v2-new-key-banner').style.display='none'">Dismiss</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ==================== TAB: CHARTS ==================== -->
