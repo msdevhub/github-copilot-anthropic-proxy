@@ -685,6 +685,7 @@ async function handleRequest(req, res) {
   const startTime = Date.now();
   const logEntry = { status: 0, model: null, stream: false, usage: null, preview: "", error: null, durationMs: 0, requestSummary: "" };
   logEntry.apiKeyName = apiKeyCheck.name;
+  logEntry.keyHash = apiKeyCheck.keyRow?.key_hash || null;
 
   try {
     // Use token bound to the API key, or fall back to active token
@@ -1020,6 +1021,7 @@ async function handleChatCompletions(req, res) {
   const startTime = Date.now();
   const logEntry = { status: 0, model: null, stream: false, usage: null, preview: "", error: null, durationMs: 0, requestSummary: "" };
   logEntry.apiKeyName = apiKeyCheck.name;
+  logEntry.keyHash = apiKeyCheck.keyRow?.key_hash || null;
 
   try {
     const boundTokenName = apiKeyCheck.tokenName;
