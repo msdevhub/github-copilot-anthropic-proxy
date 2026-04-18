@@ -12,10 +12,10 @@ import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
 import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession, checkUserSession, createUserSession, destroyUserSession } from "./lib/auth.mjs";
-import { db, addLog } from "./lib/database.mjs";
+import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey } from "./lib/keys-v2.mjs";
-import { reloadPricing, getPricing, estimateCost } from "./lib/pricing.mjs";
+import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing } from "./lib/pricing.mjs";
 import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
 
 reloadPricing();
@@ -677,7 +677,10 @@ async function handleRequest(req, res) {
       res.end(JSON.stringify({ error: { type: "auth_error", reason: adm.reason } }));
       return;
     }
-    await handleAdmin(req, res);
+    const adminCtx = session
+      ? { source: "dashboard", adminKeyHash: null, adminName: "dashboard" }
+      : { source: "apikey", adminKeyHash: adm.keyRow?.key_hash || null, adminName: adm.keyRow?.name || null };
+    await handleAdmin(req, res, adminCtx);
     return;
   }
 
@@ -966,10 +969,11 @@ function publicKeyView(row) {
   };
 }
 
-async function handleAdmin(req, res) {
+async function handleAdmin(req, res, adminCtx = { source: "unknown", adminKeyHash: null, adminName: null }) {
   const url = new URL(req.url, "http://localhost");
   const path = url.pathname;
   const send = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+  const audit = (action, target, payload) => recordAdminAction({ adminKeyHash: adminCtx.adminKeyHash, adminName: adminCtx.adminName, action, target, payload });
 
   // GET /admin/keys
   if (req.method === "GET" && path === "/admin/keys") {
@@ -990,11 +994,12 @@ async function handleAdmin(req, res) {
       token_name: body.token_name || null,
       note: body.note || null,
     });
+    audit("key.create", created.key_hash, { name: body.name, role: body.role, free_quota: body.free_quota, balance_tokens: body.balance_tokens, unlimited: !!body.unlimited });
     return send(201, { ok: true, key: created.raw, key_hash: created.key_hash, key_prefix: created.prefix });
   }
 
-  // /admin/keys/:hash[/topup|/reset-free]
-  const m = path.match(/^\/admin\/keys\/([a-f0-9]{64})(?:\/(topup|reset-free))?$/);
+  // /admin/keys/:hash[/topup|/reset-free|/ledger]
+  const m = path.match(/^\/admin\/keys\/([a-f0-9]{64})(?:\/(topup|reset-free|ledger))?$/);
   if (m) {
     const h = m[1], action = m[2];
     const row = getKeyByHash(h);
@@ -1003,18 +1008,30 @@ async function handleAdmin(req, res) {
     if (action === "topup" && req.method === "POST") {
       const body = await readJsonBody(req);
       if (!body || !Number.isFinite(body.tokens) || body.tokens <= 0) return send(400, { error: "tokens (positive number) required" });
-      return send(200, { ok: true, key: publicKeyView(topupKey(h, body.tokens)) });
+      const updated = topupKey(h, body.tokens);
+      audit("key.topup", h, { name: row.name, tokens: body.tokens, new_balance: updated.balance_tokens });
+      return send(200, { ok: true, key: publicKeyView(updated) });
     }
     if (action === "reset-free" && req.method === "POST") {
-      return send(200, { ok: true, key: publicKeyView(resetFree(h)) });
+      const updated = resetFree(h);
+      audit("key.reset_free", h, { name: row.name });
+      return send(200, { ok: true, key: publicKeyView(updated) });
+    }
+    if (action === "ledger" && req.method === "GET") {
+      const limit = Number(url.searchParams.get("limit") || 20);
+      return send(200, { ledger: listLedger({ keyHash: h, limit }) });
     }
     if (req.method === "PATCH") {
       const body = await readJsonBody(req);
       if (!body) return send(400, { error: "invalid JSON" });
-      return send(200, { ok: true, key: publicKeyView(updateKey(h, body)) });
+      const updated = updateKey(h, body);
+      audit("key.update", h, { name: row.name, patch: body });
+      return send(200, { ok: true, key: publicKeyView(updated) });
     }
     if (req.method === "DELETE") {
-      return send(200, { ok: true, key: publicKeyView(disableKey(h)) });
+      const updated = disableKey(h);
+      audit("key.disable", h, { name: row.name });
+      return send(200, { ok: true, key: publicKeyView(updated) });
     }
     if (req.method === "GET") {
       return send(200, { key: publicKeyView(row) });
@@ -1030,13 +1047,115 @@ async function handleAdmin(req, res) {
     return send(200, { ledger: listLedger({ keyHash, from, to, limit }) });
   }
 
+  // GET /admin/overview?from=&to=  → { byKey, byModel, daily, totals }
+  if (req.method === "GET" && path === "/admin/overview") {
+    const from = url.searchParams.get("from") || null;
+    const to = url.searchParams.get("to") || null;
+    const where = [];
+    const params = [];
+    if (from) { where.push("ts >= ?"); params.push(from); }
+    if (to)   { where.push("ts <= ?"); params.push(to); }
+    const wc = where.length ? "WHERE " + where.join(" AND ") : "";
+
+    const byKeyRows = db.prepare(`
+      SELECT l.key_hash AS key_hash,
+             COALESCE(k.name, '(unknown)') AS name,
+             COUNT(*) AS requests,
+             COALESCE(SUM(l.input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(l.output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(l.cost_tokens), 0) AS cost
+        FROM usage_ledger l
+        LEFT JOIN api_keys_v2 k ON k.key_hash = l.key_hash
+      ${wc}
+      GROUP BY l.key_hash
+      ORDER BY cost DESC
+    `).all(...params);
+
+    const byModelRows = db.prepare(`
+      SELECT model,
+             COUNT(*) AS requests,
+             COALESCE(SUM(input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(cost_tokens), 0) AS cost,
+             CAST(COALESCE(AVG(cost_tokens), 0) AS INTEGER) AS avg_cost
+        FROM usage_ledger
+      ${wc}
+      GROUP BY model
+      ORDER BY cost DESC
+    `).all(...params);
+
+    const dailyRows = db.prepare(`
+      SELECT substr(ts, 1, 10) AS day,
+             COUNT(*) AS requests,
+             COALESCE(SUM(cost_tokens), 0) AS cost
+        FROM usage_ledger
+      ${wc}
+      GROUP BY day
+      ORDER BY day
+    `).all(...params);
+
+    const totals = db.prepare(`
+      SELECT COUNT(*) AS requests,
+             COALESCE(SUM(input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(cost_tokens), 0) AS cost
+        FROM usage_ledger
+      ${wc}
+    `).get(...params);
+
+    return send(200, { byKey: byKeyRows, byModel: byModelRows, daily: dailyRows, totals });
+  }
+
   // GET /admin/pricing
   if (req.method === "GET" && path === "/admin/pricing") {
     return send(200, { pricing: getPricing() });
   }
   // POST /admin/pricing/reload
   if (req.method === "POST" && path === "/admin/pricing/reload") {
+    audit("pricing.reload", null, null);
     return send(200, { pricing: reloadPricing() });
+  }
+  // POST /admin/pricing  — create a new model entry
+  if (req.method === "POST" && path === "/admin/pricing") {
+    const body = await readJsonBody(req);
+    if (!body || !body.model) return send(400, { error: "model is required" });
+    try {
+      const rates = setModelPricing(body.model, body);
+      audit("pricing.create", body.model, rates);
+      reloadPricing();
+      return send(201, { ok: true, model: body.model, rates });
+    } catch (e) { return send(400, { error: e.message }); }
+  }
+  // PATCH /admin/pricing/:model — upsert
+  // DELETE /admin/pricing/:model — remove
+  const pm = path.match(/^\/admin\/pricing\/([^/]+)$/);
+  if (pm) {
+    const model = decodeURIComponent(pm[1]);
+    if (req.method === "PATCH") {
+      const body = await readJsonBody(req);
+      try {
+        const rates = setModelPricing(model, body);
+        audit("pricing.update", model, rates);
+        reloadPricing();
+        return send(200, { ok: true, model, rates });
+      } catch (e) { return send(400, { error: e.message }); }
+    }
+    if (req.method === "DELETE") {
+      try {
+        const ok = deleteModelPricing(model);
+        if (!ok) return send(404, { error: "model not found" });
+        audit("pricing.delete", model, null);
+        reloadPricing();
+        return send(200, { ok: true, model });
+      } catch (e) { return send(400, { error: e.message }); }
+    }
+  }
+
+  // GET /admin/audit?limit=&offset=
+  if (req.method === "GET" && path === "/admin/audit") {
+    const limit = Number(url.searchParams.get("limit") || 200);
+    const offset = Number(url.searchParams.get("offset") || 0);
+    return send(200, { actions: listAdminActions({ limit, offset }) });
   }
 
   return send(404, { error: "not found" });
