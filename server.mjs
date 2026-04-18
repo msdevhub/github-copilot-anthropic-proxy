@@ -13,6 +13,7 @@ import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getR
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
 import { checkApiKey, checkDashboardSession, createDashboardSession, destroyDashboardSession } from "./lib/auth.mjs";
 import { db, addLog } from "./lib/database.mjs";
+import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
 
 // ─── CLI: --add-key <name> ───────────────────────────────────────────────────
 const addKeyIdx = process.argv.indexOf("--add-key");
@@ -602,16 +603,13 @@ async function handleRequest(req, res) {
   // GET /v1/models — return supported models list (needed by Claude Code)
   if (req.method === "GET" && req.url.startsWith("/v1/models")) {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      data: [
-        { id: "claude-sonnet-4-20250514", display_name: "Claude Sonnet 4", created_at: "2025-05-14" },
-        { id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4", created_at: "2025-05-14" },
-        { id: "claude-haiku-3-5-20241022", display_name: "Claude 3.5 Haiku", created_at: "2024-10-22" },
-        { id: "claude-opus-4-20250514", display_name: "Claude Opus 4", created_at: "2025-05-14" },
-        { id: "claude-opus-4-7-20250715", display_name: "Claude Opus 4.7", created_at: "2025-07-15" },
-        { id: "claude-opus-4-7", display_name: "Claude Opus 4.7", created_at: "2025-07-15" },
-      ]
-    }));
+    res.end(JSON.stringify({ data: MODEL_REGISTRY }));
+    return;
+  }
+
+  // ── POST /v1/chat/completions — OpenAI-compatible entry ───────────────────
+  if (req.method === "POST" && req.url.startsWith("/v1/chat/completions")) {
+    await handleChatCompletions(req, res);
     return;
   }
 
@@ -675,6 +673,22 @@ async function handleRequest(req, res) {
     try { parsed = JSON.parse(body.toString()); } catch { parsed = null; }
 
     if (parsed) {
+
+      // Reject non-Claude models on the Anthropic-protocol entry. Cross-protocol
+      // routing (e.g. GPT/Gemini via /v1/messages) is intentionally unsupported —
+      // each entry only accepts its native models. Use /v1/chat/completions for
+      // OpenAI/Google models instead.
+      if (parsed.model && !isClaudeModel(parsed.model)) {
+        const msg = `Model "${parsed.model}" is not supported on /v1/messages. Use /v1/chat/completions for OpenAI/Google models.`;
+        logEntry.model = parsed.model;
+        logEntry.status = 400;
+        logEntry.error = msg;
+        logEntry.durationMs = Date.now() - startTime;
+        addLog(logEntry);
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: msg } }));
+        return;
+      }
 
       // Remap claude-opus-4.6 variants to the 1M context version
       if (parsed.model && /^claude-opus-4[.\-]6/i.test(parsed.model) && parsed.model !== 'claude-opus-4.6-1m') {
@@ -826,6 +840,178 @@ async function handleRequest(req, res) {
   }
 }
 
+// ─── /v1/chat/completions (OpenAI-compatible) ───────────────────────────────
+async function handleChatCompletions(req, res) {
+  const apiKeyCheck = checkApiKey(req, true);
+  if (!apiKeyCheck.valid) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      error: { type: "authentication_error", message: "Invalid API key. Provide a valid key via x-api-key header or Authorization: Bearer <key>", code: "invalid_api_key" },
+    }));
+    return;
+  }
+
+  if (apiKeyCheck.name) {
+    const rlError = checkRateLimit(apiKeyCheck.name);
+    if (rlError) {
+      const resetSec = Math.ceil(Math.max(rlError.resetMs, 0) / 1000);
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "retry-after": String(resetSec),
+        "x-ratelimit-limit-requests": String(rlError.limit),
+        "x-ratelimit-remaining-requests": "0",
+        "x-ratelimit-reset-requests": new Date(Date.now() + rlError.resetMs).toISOString(),
+      });
+      res.end(JSON.stringify({ error: { type: "rate_limit_error", message: rlError.message } }));
+      return;
+    }
+    recordRequest(apiKeyCheck.name);
+  }
+
+  const startTime = Date.now();
+  const logEntry = { status: 0, model: null, stream: false, usage: null, preview: "", error: null, durationMs: 0, requestSummary: "" };
+  logEntry.apiKeyName = apiKeyCheck.name;
+
+  try {
+    const boundTokenName = apiKeyCheck.tokenName;
+    const { token, baseUrl, tokenName } = boundTokenName
+      ? await getTokenByName(boundTokenName)
+      : await getToken();
+    logEntry.tokenName = tokenName;
+
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+
+    let parsed;
+    try { parsed = JSON.parse(body.toString()); } catch { parsed = null; }
+
+    if (!parsed || !parsed.model) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "invalid_request_error", message: "Request body must be JSON with a `model` field." } }));
+      return;
+    }
+
+    // Reject Claude models on the OpenAI entry — use /v1/messages instead.
+    if (isClaudeModel(parsed.model)) {
+      const msg = `Model "${parsed.model}" is a Claude model — use /v1/messages instead of /v1/chat/completions.`;
+      logEntry.model = parsed.model;
+      logEntry.status = 400;
+      logEntry.error = msg;
+      logEntry.durationMs = Date.now() - startTime;
+      addLog(logEntry);
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "invalid_request_error", message: msg } }));
+      return;
+    }
+
+    logEntry.model = parsed.model;
+    logEntry.stream = !!parsed.stream;
+    const { preview, requestSummary } = summarizeChatRequest(parsed);
+    logEntry.preview = preview;
+    logEntry.requestSummary = requestSummary;
+
+    // Ask upstream to include usage in stream's final chunk (OpenAI-compat).
+    if (parsed.stream && !parsed.stream_options) {
+      parsed.stream_options = { include_usage: true };
+    } else if (parsed.stream && parsed.stream_options && parsed.stream_options.include_usage === undefined) {
+      parsed.stream_options.include_usage = true;
+    }
+
+    const forwardBody = JSON.stringify(parsed);
+    logEntry.requestBody = forwardBody;
+
+    const upstream = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+        ...REQUIRED_HEADERS,
+      },
+      body: forwardBody,
+    });
+
+    logEntry.status = upstream.status;
+
+    if (upstream.status >= 400) {
+      let errBody = '';
+      try {
+        errBody = await upstream.text();
+        const errJson = JSON.parse(errBody);
+        const errMsg = errJson.error?.message || errJson.message || errBody.slice(0, 500);
+        logEntry.error = `HTTP ${upstream.status}: ${errMsg}`;
+      } catch {
+        logEntry.error = `HTTP ${upstream.status}: ${errBody.slice(0, 500)}`;
+      }
+      logEntry.durationMs = Date.now() - startTime;
+      addLog(logEntry);
+      res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/json" });
+      res.end(errBody);
+      return;
+    }
+
+    const fwdHeaders = { "Content-Type": upstream.headers.get("content-type") || "application/json" };
+    if (upstream.headers.get("x-request-id")) fwdHeaders["x-request-id"] = upstream.headers.get("x-request-id");
+    if (apiKeyCheck.name) {
+      const keys = loadApiKeys();
+      const keyObj = keys.find(k => k.name === apiKeyCheck.name);
+      const rl = keyObj?.rate_limit;
+      if (rl && rl.rpm > 0) {
+        const counters = getRateLimitCounters(apiKeyCheck.name);
+        pruneCounters(counters);
+        fwdHeaders["x-ratelimit-limit-requests"] = String(rl.rpm);
+        fwdHeaders["x-ratelimit-remaining-requests"] = String(Math.max(0, rl.rpm - counters.rpm.length));
+        const oldest = counters.rpm[0];
+        fwdHeaders["x-ratelimit-reset-requests"] = oldest ? new Date(oldest + 60_000).toISOString() : new Date(Date.now() + 60_000).toISOString();
+      }
+    }
+    res.writeHead(upstream.status, fwdHeaders);
+
+    if (!upstream.body) {
+      logEntry.durationMs = Date.now() - startTime;
+      addLog(logEntry);
+      res.end();
+      return;
+    }
+
+    const respChunks = [];
+    const reader = upstream.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+        respChunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    res.end();
+
+    logEntry.durationMs = Date.now() - startTime;
+    const respText = Buffer.concat(respChunks).toString();
+    logEntry.responseBody = respText;
+    logEntry.usage = logEntry.stream ? extractUsageStream(respText) : extractUsageNonStream(respText);
+
+    if (apiKeyCheck.name && logEntry.usage) {
+      recordTokenUsage(apiKeyCheck.name, (logEntry.usage.input || 0) + (logEntry.usage.output || 0));
+    }
+    addLog(logEntry);
+
+  } catch (err) {
+    logEntry.status = 502;
+    logEntry.error = fullError(err);
+    logEntry.durationMs = Date.now() - startTime;
+    addLog(logEntry);
+    console.error("[chat.completions error]", fullError(err));
+    if (!res.headersSent) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "proxy_error", message: err.message } }));
+    } else {
+      res.end();
+    }
+  }
+}
 // --- Start ---
 const server = createServer(handleRequest);
 
@@ -928,6 +1114,7 @@ server.listen(PORT, "127.0.0.1", () => {
   const apiKeysConfigured = loadApiKeys().length;
   console.log(`🍟 Copilot→Anthropic proxy running at http://127.0.0.1:${PORT}`);
   console.log(`   API:       POST http://127.0.0.1:${PORT}/v1/messages`);
+  console.log(`              POST http://127.0.0.1:${PORT}/v1/chat/completions`);
   console.log(`   Dashboard: http://127.0.0.1:${PORT}/`);
   console.log(`   DB:        ${DB_PATH}`);
   console.log(`   API keys:  ${apiKeysConfigured ? `${apiKeysConfigured} key(s) configured (${API_KEYS_PATH})` : "none — all requests allowed (add keys with --add-key)"}`);
