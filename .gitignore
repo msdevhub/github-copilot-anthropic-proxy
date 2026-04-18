@@ -1,5 +1,12 @@
 *.log
 *.db
+*.db-shm
+*.db-wal
 node_modules/
 api-keys.json
 tokens.json
+.env
+.env.*
+!.env.example
+.DS_Store
+
