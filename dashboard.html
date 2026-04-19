@@ -44,12 +44,17 @@
     <div class="hdr-sep"></div>
     <span class="hdr-user" id="hdr-user"></span>
     <button class="btn" onclick="signOut()" id="btn-logout">Logout</button>
+    <a class="btn" href="/user" title="User self-service view" style="text-decoration:none">User View</a>
   </div>
 </header>
 
 <div class="top-tabs">
   <div class="top-tab active" data-tab="logs" onclick="switchMainTab('logs')">Logs</div>
   <div class="top-tab" data-tab="settings" onclick="switchMainTab('settings')">Settings</div>
+  <div class="top-tab" data-tab="keys" onclick="switchMainTab('keys')">Keys</div>
+  <div class="top-tab" data-tab="usage" onclick="switchMainTab('usage')">Usage</div>
+  <div class="top-tab" data-tab="pricing" onclick="switchMainTab('pricing')">Pricing</div>
+  <div class="top-tab" data-tab="audit" onclick="switchMainTab('audit')">Audit</div>
   <div class="top-tab" data-tab="charts" onclick="switchMainTab('charts')">Charts</div>
 </div>
 
@@ -184,6 +189,159 @@
 
   </div>
 
+  <!-- ==================== TAB: KEYS (v2 — quota / billing) ==================== -->
+  <div class="tab-content" id="tab-keys">
+
+    <div class="stats">
+      <div class="stat"><div class="stat-num" id="k-total">0</div><div class="stat-label">Keys</div></div>
+      <div class="stat"><div class="stat-num c-green" id="k-active">0</div><div class="stat-label">Active</div></div>
+      <div class="stat"><div class="stat-num c-amber" id="k-unlimited">0</div><div class="stat-label">Unlimited</div></div>
+      <div class="stat"><div class="stat-num c-violet" id="k-balance">0</div><div class="stat-label">Total Balance</div></div>
+      <div class="stat"><div class="stat-num c-red" id="k-disabled">0</div><div class="stat-label">Disabled</div></div>
+    </div>
+
+    <div class="bar">
+      <div class="bar-row-1">
+        <input type="text" id="k-search" placeholder="Search by name…" oninput="v2RenderKeys()" style="min-width:180px">
+        <select id="k-status" onchange="v2RenderKeys()">
+          <option value="">All status</option>
+          <option value="active">Active</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <select id="k-role" onchange="v2RenderKeys()">
+          <option value="">All roles</option>
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
+        <select id="k-unlim" onchange="v2RenderKeys()">
+          <option value="">Any quota mode</option>
+          <option value="1">Unlimited</option>
+          <option value="0">Quota</option>
+        </select>
+        <button class="btn on" onclick="v2OpenCreateModal()">+ Create Key</button>
+        <button class="btn" onclick="v2LoadKeys()">Refresh</button>
+      </div>
+    </div>
+
+    <div id="v2-new-key-banner" style="display:none;margin:0 0 12px;padding:10px 12px;border:1px solid var(--accent-bright);border-radius:6px;background:rgba(80,150,255,.08)">
+      <div style="font-size:11px;color:var(--text-4);margin-bottom:4px">New raw key — copy now, it won't be shown again</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <code id="v2-new-key-value" style="flex:1;padding:6px 8px;background:rgba(0,0,0,.25);border-radius:4px;font-size:12px;word-break:break-all"></code>
+        <button class="btn" onclick="v2CopyNewKey()">Copy</button>
+        <button class="btn" onclick="document.getElementById('v2-new-key-banner').style.display='none'">Dismiss</button>
+      </div>
+    </div>
+
+    <div class="tbl-container">
+      <table class="tbl" id="keys-tbl">
+        <thead>
+          <tr>
+            <th onclick="v2SortKeys('name')">Name <span class="sort-arrow" data-col="name"></span></th>
+            <th>Prefix</th>
+            <th onclick="v2SortKeys('role')">Role <span class="sort-arrow" data-col="role"></span></th>
+            <th onclick="v2SortKeys('status')">Status <span class="sort-arrow" data-col="status"></span></th>
+            <th onclick="v2SortKeys('unlimited')">Unlimited <span class="sort-arrow" data-col="unlimited"></span></th>
+            <th onclick="v2SortKeys('free_used')">Free (used / quota) <span class="sort-arrow" data-col="free_used"></span></th>
+            <th onclick="v2SortKeys('balance_tokens')">Balance <span class="sort-arrow" data-col="balance_tokens"></span></th>
+            <th onclick="v2SortKeys('last_used_at')">Last Used <span class="sort-arrow" data-col="last_used_at"></span></th>
+            <th onclick="v2SortKeys('created_at')">Created <span class="sort-arrow" data-col="created_at"></span></th>
+            <th style="width:1%;white-space:nowrap">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="keys-body"><tr><td colspan="10" style="text-align:center;color:var(--text-4)">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- ==================== TAB: USAGE (overview) ==================== -->
+  <div class="tab-content" id="tab-usage">
+    <div class="bar">
+      <div class="bar-row-1">
+        <select id="ov-range" onchange="loadOverview()">
+          <option value="today">Today</option>
+          <option value="7d" selected>Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="all">All time</option>
+          <option value="custom">Custom…</option>
+        </select>
+        <input type="datetime-local" id="ov-from" step="1" style="display:none">
+        <span id="ov-tilde" style="color:var(--text-4);font-size:11px;display:none">~</span>
+        <input type="datetime-local" id="ov-to" step="1" style="display:none">
+        <button class="btn" onclick="loadOverview()">Apply</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="stat-num" id="ov-req">0</div><div class="stat-label">Requests</div></div>
+      <div class="stat"><div class="stat-num c-amber" id="ov-input">0</div><div class="stat-label">Input Tokens</div></div>
+      <div class="stat"><div class="stat-num c-amber" id="ov-output">0</div><div class="stat-label">Output Tokens</div></div>
+      <div class="stat"><div class="stat-num c-violet" id="ov-cost">0</div><div class="stat-label">Cost (tokens)</div></div>
+    </div>
+
+    <div class="charts charts-2col">
+      <div class="chart-card">
+        <div class="chart-title">Top Keys (by cost)</div>
+        <div class="tbl-container" style="max-height:340px;overflow:auto">
+          <table class="tbl"><thead><tr><th>Name</th><th>Reqs</th><th>Input</th><th>Output</th><th>Cost</th></tr></thead><tbody id="ov-bykey"><tr><td colspan="5" style="text-align:center;color:var(--text-4)">—</td></tr></tbody></table>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">By Model (cost &amp; avg)</div>
+        <div class="tbl-container" style="max-height:340px;overflow:auto">
+          <table class="tbl"><thead><tr><th>Model</th><th>Reqs</th><th>Input</th><th>Output</th><th>Cost</th><th>Avg</th></tr></thead><tbody id="ov-bymodel"><tr><td colspan="6" style="text-align:center;color:var(--text-4)">—</td></tr></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-card" style="margin-top:12px">
+      <div class="chart-title">Daily Cost</div>
+      <div class="tbl-container" style="max-height:300px;overflow:auto">
+        <table class="tbl"><thead><tr><th>Day</th><th>Requests</th><th>Cost</th><th style="width:60%">Trend</th></tr></thead><tbody id="ov-daily"><tr><td colspan="4" style="text-align:center;color:var(--text-4)">—</td></tr></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TAB: PRICING ==================== -->
+  <div class="tab-content" id="tab-pricing">
+    <div class="settings-card">
+      <div class="settings-card-title">Model Pricing (cost = input × in-mult + output × out-mult)</div>
+      <div style="color:var(--text-4);font-size:11px;margin-bottom:12px">
+        Edits write back to <code style="color:var(--accent-bright)">pricing.json</code> and take effect immediately. Row <code style="color:var(--accent-bright)">_default</code> is the fallback for unknown models and cannot be deleted.
+      </div>
+      <div class="bar"><div class="bar-row-1">
+        <button class="btn" onclick="loadPricing()">Refresh</button>
+        <button class="btn" onclick="reloadPricingFile()">Reload from file</button>
+        <span style="flex:1"></span>
+        <input type="text" id="pr-add-model" placeholder="model id (e.g. claude-haiku-4-5)" style="min-width:220px" class="token-input">
+        <input type="number" id="pr-add-in" placeholder="in-mult" value="1" min="0" step="0.1" style="width:90px" class="token-input">
+        <input type="number" id="pr-add-out" placeholder="out-mult" value="5" min="0" step="0.1" style="width:90px" class="token-input">
+        <button class="btn on" onclick="addPricingRow()">+ Add Model</button>
+      </div></div>
+      <div class="tbl-container">
+        <table class="tbl">
+          <thead><tr><th>Model</th><th style="width:140px">Input mult.</th><th style="width:140px">Output mult.</th><th style="width:1%;white-space:nowrap">Actions</th></tr></thead>
+          <tbody id="pricing-body"><tr><td colspan="4" style="text-align:center;color:var(--text-4)">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TAB: AUDIT ==================== -->
+  <div class="tab-content" id="tab-audit">
+    <div class="bar"><div class="bar-row-1">
+      <button class="btn" onclick="loadAudit()">Refresh</button>
+      <input type="text" id="audit-filter" placeholder="filter action / target / admin…" oninput="renderAudit()" style="min-width:240px">
+      <span style="color:var(--text-4);font-size:11px" id="audit-count"></span>
+    </div></div>
+    <div class="tbl-container">
+      <table class="tbl">
+        <thead><tr><th>Time</th><th>Admin</th><th>Action</th><th>Target</th><th style="width:60%">Payload</th></tr></thead>
+        <tbody id="audit-body"><tr><td colspan="5" style="text-align:center;color:var(--text-4)">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ==================== TAB: CHARTS ==================== -->
   <div class="tab-content" id="tab-charts">
 
@@ -261,6 +419,63 @@
 </div>
 
 <div class="chart-tip" id="chart-tip"></div>
+
+<!-- Create Key Modal (advanced) -->
+<div class="modal-overlay" id="v2-create-modal" onclick="if(event.target===this)v2CloseCreateModal()">
+  <div class="modal-box" style="width:480px">
+    <div class="modal-title">Create API Key</div>
+    <div class="modal-field"><label>Name</label><input type="text" id="v2c-name" placeholder="e.g. friend-laptop"></div>
+    <div class="modal-field"><label>Role</label>
+      <select id="v2c-role"><option value="user">user</option><option value="admin">admin</option></select>
+    </div>
+    <div class="modal-field"><label>Free monthly quota</label><input type="number" id="v2c-free" value="10000" min="0">
+      <div class="hint">In equivalent tokens. Resets every month.</div>
+    </div>
+    <div class="modal-field"><label>Initial balance</label><input type="number" id="v2c-balance" value="0" min="0">
+      <div class="hint">Pre-paid balance in equivalent tokens.</div>
+    </div>
+    <div class="modal-field"><label>Unlimited</label>
+      <select id="v2c-unlimited"><option value="0">no</option><option value="1">yes</option></select>
+    </div>
+    <div class="modal-field"><label>Allowed models (comma-separated, blank = all)</label>
+      <input type="text" id="v2c-models" placeholder="claude-opus-4-7, gpt-4o-mini">
+    </div>
+    <div class="modal-field"><label>Note (optional)</label><input type="text" id="v2c-note" placeholder=""></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="v2CloseCreateModal()">Cancel</button>
+      <button class="btn on" onclick="v2SubmitCreateModal()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Quota Modal -->
+<div class="modal-overlay" id="v2-quota-modal" onclick="if(event.target===this)v2CloseQuotaModal()">
+  <div class="modal-box" style="width:460px">
+    <div class="modal-title">Edit Quota / Restrictions</div>
+    <input type="hidden" id="v2q-hash">
+    <div class="modal-field"><label>Free monthly quota</label><input type="number" id="v2q-free" min="0"></div>
+    <div class="modal-field"><label>Allowed models (comma-separated, blank = all)</label><input type="text" id="v2q-models" placeholder="claude-opus-4-7, gpt-4o-mini"></div>
+    <div class="modal-field"><label>Note</label><input type="text" id="v2q-note"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="v2CloseQuotaModal()">Cancel</button>
+      <button class="btn on" onclick="v2SubmitQuotaModal()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Topup Modal -->
+<div class="modal-overlay" id="v2-topup-modal" onclick="if(event.target===this)v2CloseTopupModal()">
+  <div class="modal-box" style="width:380px">
+    <div class="modal-title">Top up balance</div>
+    <input type="hidden" id="v2t-hash">
+    <div class="modal-field"><label>Key</label><div id="v2t-name" style="color:var(--text-2);font-size:12px"></div></div>
+    <div class="modal-field"><label>Tokens to add</label><input type="number" id="v2t-tokens" value="10000" min="1"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="v2CloseTopupModal()">Cancel</button>
+      <button class="btn on" onclick="v2SubmitTopupModal()">Top up</button>
+    </div>
+  </div>
+</div>
 
 <!-- Device Login Modal -->
 <div class="modal-overlay" id="device-modal" onclick="if(event.target===this)closeDeviceModal()">
