@@ -1,5 +1,21 @@
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Quick-start integration card */
+.qs-card { background: var(--surface, #15171b); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 14px 0; }
+.qs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.qs-title { font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: .06em; }
+.qs-tabs { display: inline-flex; gap: 4px; background: rgba(255,255,255,0.03); padding: 3px; border-radius: 7px; border: 1px solid var(--border); }
+.qs-tab { padding: 5px 12px; font-size: 12px; font-weight: 500; color: var(--text-3); border-radius: 5px; cursor: pointer; user-select: none; transition: all .15s; }
+.qs-tab:hover { color: var(--text-1); }
+.qs-tab.active { background: var(--accent); color: #fff; }
+.qs-panel { display: none; position: relative; }
+.qs-panel.active { display: block; }
+.qs-pre { margin: 0; background: #0a0c10; border: 1px solid var(--border); border-radius: 7px; padding: 12px 14px; padding-right: 80px; font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--text-1); overflow-x: auto; white-space: pre; }
+.qs-copy { position: absolute; top: 8px; right: 8px; padding: 4px 10px; font-size: 11px; font-weight: 500; background: rgba(255,255,255,0.05); color: var(--text-2); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; transition: all .15s; }
+.qs-copy:hover { background: rgba(255,255,255,0.1); color: var(--text-1); }
+.qs-copy.ok { background: rgba(61,214,140,0.15); color: #3dd68c; border-color: rgba(61,214,140,0.3); }
+.qs-hint { margin-top: 8px; font-size: 11px; color: var(--text-4); }
+
 :root {
   --bg-0: #08090a;
   --bg-1: #0f1011;

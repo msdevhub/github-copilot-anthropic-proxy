@@ -79,6 +79,53 @@
     </header>
 
     <div class="page">
+      <!-- Quick-start integration -->
+      <div class="qs-card">
+        <div class="qs-head">
+          <span class="qs-title">⚡ Quick Start · 接入指引</span>
+          <div class="qs-tabs">
+            <div class="qs-tab active" data-qs="cc" onclick="qsSwitch('cc')">Claude Code</div>
+            <div class="qs-tab" data-qs="oc" onclick="qsSwitch('oc')">OpenClaw</div>
+          </div>
+        </div>
+        <div class="qs-panel active" id="qs-cc">
+          <pre class="qs-pre" id="qs-cc-pre">export ANTHROPIC_BASE_URL=https://api.eagle.openclaws.co.uk
+export ANTHROPIC_AUTH_TOKEN=sk-你的key
+claude</pre>
+          <button class="qs-copy" onclick="qsCopy('qs-cc-pre', this)">Copy</button>
+        </div>
+        <div class="qs-panel" id="qs-oc">
+          <pre class="qs-pre" id="qs-oc-pre">// ~/.openclaw/agents/&lt;agent&gt;/agent/models.json
+{
+  "providers": {
+    "copilot-proxy": {
+      "baseUrl": "https://api.eagle.openclaws.co.uk/v1/",
+      "apiKey": "sk-你的key",
+      "api": "openai-completions",
+      "models": [
+        { "id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6", "api": "openai-completions" }
+      ]
+    }
+  }
+}</pre>
+          <button class="qs-copy" onclick="qsCopy('qs-oc-pre', this)">Copy</button>
+          <div class="qs-hint">把 agent primary model 设成 <code>copilot-proxy/claude-sonnet-4.6</code></div>
+        </div>
+      </div>
+      <script>
+        function qsSwitch(k){
+          document.querySelectorAll('.qs-tab').forEach(t=>t.classList.toggle('active', t.dataset.qs===k));
+          document.querySelectorAll('.qs-panel').forEach(p=>p.classList.toggle('active', p.id==='qs-'+k));
+        }
+        function qsCopy(id, btn){
+          const txt = document.getElementById(id).innerText;
+          navigator.clipboard.writeText(txt).then(()=>{
+            const o = btn.textContent; btn.textContent='Copied'; btn.classList.add('ok');
+            setTimeout(()=>{ btn.textContent=o; btn.classList.remove('ok'); }, 1400);
+          });
+        }
+      </script>
+
       <div class="user-grid">
         <div class="user-card" id="card-quota">
           <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">Free Quota</div>
