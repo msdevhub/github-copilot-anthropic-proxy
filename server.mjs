@@ -2,7 +2,7 @@
 // Copilot → Anthropic API Proxy (with SQLite logging + dashboard)
 
 import { createServer } from "node:http";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -11,7 +11,7 @@ import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_
 import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
-import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession, checkUserSession, createUserSession, destroyUserSession } from "./lib/auth.mjs";
+import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext, createWxPendingSession, promoteUserSession } from "./lib/auth.mjs";
 import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey } from "./lib/keys-v2.mjs";
@@ -19,6 +19,18 @@ import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPr
 import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
 
 reloadPricing();
+
+// ─── WeChat gateway config (env-driven; if any missing, WeChat login is disabled) ─
+const WX_GATEWAY_BASE = (process.env.WX_GATEWAY_BASE || "").replace(/\/+$/, "");
+const WX_GATEWAY_APP_NAME = process.env.WX_GATEWAY_APP_NAME || "";
+const WX_GATEWAY_SECRET = process.env.WX_GATEWAY_SECRET || "";
+const WX_LOGIN_ENABLED = !!(WX_GATEWAY_BASE && WX_GATEWAY_APP_NAME && WX_GATEWAY_SECRET);
+if (WX_LOGIN_ENABLED) {
+  console.log(`[wx] login enabled · gateway=${WX_GATEWAY_BASE} · app=${WX_GATEWAY_APP_NAME}`);
+} else {
+  console.log("[wx] login disabled — set WX_GATEWAY_BASE / WX_GATEWAY_APP_NAME / WX_GATEWAY_SECRET to enable");
+}
+const WX_MAX_SKEW_MS = 5 * 60 * 1000;
 
 // ─── CLI: --add-key <name> ───────────────────────────────────────────────────
 const addKeyIdx = process.argv.indexOf("--add-key");
@@ -193,6 +205,136 @@ async function handleRequest(req, res) {
       "Set-Cookie": "user_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
     });
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── WeChat login config (public; safe — only exposes gateway base + app name) ─
+  if (req.method === "GET" && pathname === "/api/wx/config") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      enabled: WX_LOGIN_ENABLED,
+      gatewayBase: WX_LOGIN_ENABLED ? WX_GATEWAY_BASE : null,
+      appName: WX_LOGIN_ENABLED ? WX_GATEWAY_APP_NAME : null,
+    }));
+    return;
+  }
+
+  // ── WeChat finalize: gateway 302's the user here after a successful scan/OAuth ─
+  if (req.method === "GET" && pathname === "/api/wx/finalize") {
+    if (!WX_LOGIN_ENABLED) {
+      res.writeHead(302, { Location: "/?err=wx_disabled" });
+      res.end();
+      return;
+    }
+    const url = new URL(req.url, "http://localhost");
+    const sp = url.searchParams;
+    const token = sp.get("token") || "";
+    const openid = sp.get("openid") || "";
+    const unionid = sp.get("unionid") || "";
+    const ts = sp.get("ts") || "";
+    const sig = sp.get("sig") || "";
+    const nickname = (sp.get("nickname") || "").trim() || null;
+    const avatarUrl = (sp.get("avatarUrl") || "").trim() || null;
+
+    const redirect = (loc) => { res.writeHead(302, { Location: loc }); res.end(); };
+
+    if (!token || !openid || !ts || !sig) return redirect("/?err=missing");
+    if (!Number.isFinite(Number(ts)) || Math.abs(Date.now() - Number(ts)) > WX_MAX_SKEW_MS) {
+      return redirect("/?err=expired");
+    }
+    // HMAC-SHA256(`${token}|${openid}|${unionid}|${ts}`, SECRET) — nickname/avatar NOT in payload
+    let sigOk = false;
+    try {
+      const expected = createHmac("sha256", WX_GATEWAY_SECRET)
+        .update(`${token}|${openid}|${unionid}|${ts}`)
+        .digest("hex");
+      const a = Buffer.from(expected, "hex");
+      const b = Buffer.from(sig, "hex");
+      sigOk = a.length === b.length && timingSafeEqual(a, b);
+    } catch { sigOk = false; }
+    if (!sigOk) return redirect("/?err=sig");
+
+    // Idempotent upsert into wx_users (only fill empty fields on existing row)
+    const now = new Date().toISOString();
+    try {
+      const existing = db.prepare("SELECT * FROM wx_users WHERE openid = ?").get(openid);
+      if (!existing) {
+        db.prepare(`INSERT INTO wx_users (openid, unionid, nickname, avatar_url, created_at, last_login_at)
+                    VALUES (?, ?, ?, ?, ?, ?)`).run(openid, unionid || null, nickname, avatarUrl, now, now);
+      } else {
+        const updates = [], params = [];
+        if (nickname && !existing.nickname) { updates.push("nickname = ?"); params.push(nickname); }
+        if (avatarUrl && !existing.avatar_url) { updates.push("avatar_url = ?"); params.push(avatarUrl); }
+        if (unionid && !existing.unionid) { updates.push("unionid = ?"); params.push(unionid); }
+        updates.push("last_login_at = ?"); params.push(now);
+        params.push(openid);
+        db.prepare(`UPDATE wx_users SET ${updates.join(", ")} WHERE openid = ?`).run(...params);
+      }
+    } catch (e) {
+      console.error("[wx] upsert wx_user failed:", e.message);
+      return redirect("/?err=db");
+    }
+
+    // Look up bound API key (if any)
+    const boundKey = db.prepare("SELECT key_hash, status FROM api_keys_v2 WHERE wx_openid = ? LIMIT 1").get(openid);
+
+    let cookieValue;
+    let location;
+    if (boundKey && boundKey.status !== "disabled") {
+      // Already bound → mint a normal user session and go to dashboard
+      const tok = createUserSession(boundKey.key_hash);
+      cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
+      location = "/";
+    } else {
+      // First time (or bound key disabled) → mint pending session, prompt to bind
+      const tok = createWxPendingSession(openid);
+      cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
+      location = "/?wx_pending=1";
+    }
+    res.writeHead(302, { Location: location, "Set-Cookie": cookieValue });
+    res.end();
+    return;
+  }
+
+  // ── Bind API key to a pending WeChat session (first-time WeChat login) ───
+  if (req.method === "POST" && req.url === "/user/bind-key") {
+    const ctx = getUserSessionContext(req);
+    if (!ctx || !ctx.wxOpenid) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "no pending wechat session" }));
+      return;
+    }
+    const body = await readJsonBody(req);
+    const raw = (body && body.apiKey) ? String(body.apiKey).trim() : "";
+    if (!raw) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "apiKey is required" }));
+      return;
+    }
+    const row = getKeyByHash(hashKey(raw));
+    if (!row || row.status === "disabled") {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid or disabled key" }));
+      return;
+    }
+    // Reject if this key is already bound to a *different* wx openid
+    if (row.wx_openid && row.wx_openid !== ctx.wxOpenid) {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "this api key is already bound to another wechat account" }));
+      return;
+    }
+    try {
+      // Clear any prior wx_openid on other rows (defensive — keep at most one key per openid)
+      db.prepare("UPDATE api_keys_v2 SET wx_openid = NULL WHERE wx_openid = ? AND key_hash != ?").run(ctx.wxOpenid, row.key_hash);
+      db.prepare("UPDATE api_keys_v2 SET wx_openid = ? WHERE key_hash = ?").run(ctx.wxOpenid, row.key_hash);
+    } catch (e) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "db error: " + e.message }));
+      return;
+    }
+    promoteUserSession(ctx.token, row.key_hash);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, name: row.name, role: row.role }));
     return;
   }
 
@@ -1190,11 +1332,26 @@ async function handleUserApi(req, res) {
     // For /user/me with admin session, surface the dashboard session as a virtual admin row
     // (so the page renders something sensible); allow ?key_hash=... override.
   } else {
-    const h = checkUserSession(req);
-    if (!h) return send(401, { error: "unauthorized — POST /user/login first" });
-    viewerKey = getKeyByHash(h);
+    const ctx = getUserSessionContext(req);
+    if (!ctx) return send(401, { error: "unauthorized — POST /user/login first" });
+    // WeChat-pending session (no key bound yet) — only /user/me is allowed; returns a sentinel.
+    if (!ctx.keyHash && ctx.wxOpenid) {
+      const url = new URL(req.url, "http://localhost");
+      if (req.method === "GET" && url.pathname === "/user/me") {
+        const wxRow = db.prepare("SELECT openid, nickname, avatar_url FROM wx_users WHERE openid = ?").get(ctx.wxOpenid) || {};
+        return send(200, {
+          wx_pending: true,
+          wx_openid: ctx.wxOpenid,
+          wx_openid_short: ctx.wxOpenid.slice(0, 6) + "…" + ctx.wxOpenid.slice(-4),
+          nickname: wxRow.nickname || null,
+          avatar_url: wxRow.avatar_url || null,
+        });
+      }
+      return send(403, { error: "wx_pending — bind an API key first via POST /user/bind-key" });
+    }
+    viewerKey = getKeyByHash(ctx.keyHash);
     if (!viewerKey || viewerKey.status === "disabled") return send(401, { error: "session key disabled or missing" });
-    scopeHash = h;
+    scopeHash = ctx.keyHash;
   }
 
   const url = new URL(req.url, "http://localhost");

@@ -18,14 +18,33 @@
   .meta-row { display:flex; justify-content:space-between; font-size:12px; color:var(--text-3,#9da3ad); margin-top:6px; }
   .meta-row .v { color:var(--text-1,#e8eaed); font-weight:500; }
   .login-wrap { display:flex; align-items:center; justify-content:center; min-height:80vh; }
-  .login-card { background:var(--surface,#1a1c20); border:1px solid var(--border,#2a2d33); border-radius:12px; padding:32px; width:380px; }
+  .login-card { background:var(--surface,#1a1c20); border:1px solid var(--border,#2a2d33); border-radius:12px; padding:28px; width:420px; }
   .login-card h1 { font-size:20px; margin:0 0 6px 0; }
-  .login-card p { color:var(--text-3); font-size:13px; margin:0 0 18px; }
-  .login-card input { width:100%; padding:10px 12px; background:#0d0f12; border:1px solid var(--border); border-radius:6px; color:var(--text-1); font-family:inherit; font-size:13px; }
+  .login-card p { color:var(--text-3); font-size:13px; margin:0 0 14px; }
+  .login-card input { width:100%; padding:10px 12px; background:#0d0f12; border:1px solid var(--border); border-radius:6px; color:var(--text-1); font-family:inherit; font-size:13px; box-sizing:border-box; }
   .login-card .err { color:#ef5f5f; font-size:12px; margin-top:8px; min-height:14px; }
-  .login-card button { margin-top:14px; width:100%; padding:10px; background:#7170ff; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; }
+  .login-card button { margin-top:12px; width:100%; padding:10px; background:#7170ff; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:13px; }
   .login-card button:hover { background:#5a59e0; }
   .login-card .alt { display:block; margin-top:14px; text-align:center; color:var(--text-4); font-size:11px; text-decoration:none; }
+  .login-tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border,#2a2d33); }
+  .login-tab { padding:8px 14px; cursor:pointer; font-size:13px; color:var(--text-3); border-bottom:2px solid transparent; margin-bottom:-1px; user-select:none; }
+  .login-tab.active { color:var(--text-1,#e8eaed); border-bottom-color:#7170ff; font-weight:600; }
+  .login-panel { display:none; }
+  .login-panel.active { display:block; }
+  .qr-wrap { text-align:center; padding:6px 0; }
+  .qr-img { width:240px; height:240px; background:#fff; border-radius:8px; padding:8px; box-sizing:border-box; }
+  .qr-img.expired { opacity:.35; filter:grayscale(1); }
+  .qr-status { color:var(--text-3); font-size:12px; margin-top:10px; min-height:16px; }
+  .qr-status.scanned { color:#3dd68c; }
+  .qr-status.expired { color:#ef5f5f; }
+  .qr-hint { color:var(--text-4); font-size:11px; margin-top:6px; }
+  .qr-skel { width:240px; height:240px; background:#0d0f12; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-4); font-size:12px; }
+  .qr-retry { margin-top:8px; background:transparent; color:#7170ff; border:1px solid #7170ff; padding:6px 12px; font-size:12px; width:auto; cursor:pointer; border-radius:5px; }
+  .wx-pending-card { background:rgba(113,112,255,0.08); border:1px solid rgba(113,112,255,0.3); border-radius:8px; padding:14px; margin-bottom:14px; }
+  .wx-pending-card .row { display:flex; align-items:center; gap:12px; }
+  .wx-pending-card img { width:44px; height:44px; border-radius:50%; background:#0d0f12; }
+  .wx-pending-card .who { font-size:13px; color:var(--text-1); font-weight:600; }
+  .wx-pending-card .sub { font-size:11px; color:var(--text-3); margin-top:2px; }
   .table-wrap { overflow-x:auto; }
   table.user-logs { width:100%; border-collapse:collapse; font-size:12px; }
   table.user-logs th, table.user-logs td { padding:6px 10px; border-bottom:1px solid rgba(255,255,255,0.04); text-align:left; }
@@ -55,11 +74,39 @@
   <div id="login-screen" class="login-wrap" style="display:none">
     <div class="login-card">
       <h1>User Dashboard</h1>
-      <p>Sign in with your API key to view your usage and quota.</p>
-      <input id="login-key" type="password" placeholder="sk-proxy-..." autocomplete="off"/>
-      <div class="err" id="login-err"></div>
-      <button onclick="userLogin()">Sign in</button>
+      <p>登录后查看你的用量、配额与调用日志。</p>
+
+      <div class="login-tabs" id="login-tabs">
+        <div class="login-tab active" data-tab="wx" onclick="loginSwitch('wx')">微信扫码</div>
+        <div class="login-tab" data-tab="key" onclick="loginSwitch('key')">API Key</div>
+      </div>
+
+      <div class="login-panel active" id="login-panel-wx">
+        <div class="qr-wrap">
+          <div id="qr-slot"><div class="qr-skel">加载中…</div></div>
+          <div class="qr-status" id="qr-status">扫码关注「造悟者」公众号即登录</div>
+          <div class="qr-hint">用微信扫描上方二维码</div>
+        </div>
+      </div>
+
+      <div class="login-panel" id="login-panel-key">
+        <input id="login-key" type="password" placeholder="sk-proxy-..." autocomplete="off"/>
+        <div class="err" id="login-err"></div>
+        <button onclick="userLogin()">使用 API Key 登录</button>
+      </div>
+
       <a class="alt" href="/_admin">Admin →</a>
+    </div>
+  </div>
+
+  <div id="bind-screen" class="login-wrap" style="display:none">
+    <div class="login-card">
+      <h1>绑定 API Key</h1>
+      <p>已识别微信账号 <span id="bind-who" style="color:var(--text-1);font-weight:600"></span>，请输入你已有的 API Key 完成绑定。绑定后下次扫码即直接登录。</p>
+      <input id="bind-key" type="password" placeholder="sk-proxy-..." autocomplete="off"/>
+      <div class="err" id="bind-err"></div>
+      <button onclick="userBindKey()">绑定并登录</button>
+      <button style="background:transparent;border:1px solid var(--border);color:var(--text-3);margin-top:8px" onclick="userLogout()">取消（重新登录）</button>
     </div>
   </div>
 

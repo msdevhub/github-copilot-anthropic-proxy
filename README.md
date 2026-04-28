@@ -46,6 +46,19 @@ node server.mjs
 
 数据库 `proxy-logs.db` 会写在仓库目录，单条 request/response body 最多保留约 512 KB。
 
+### 微信扫码登录（可选）
+
+设置以下环境变量启用「微信扫码登录」（默认登录方式，未配置时自动 fallback 到 API key 登录）：
+
+```bash
+WX_GATEWAY_BASE=https://wx.mvp.restry.cn \
+WX_GATEWAY_APP_NAME=copilot-proxy \
+WX_GATEWAY_SECRET=<gateway 注册后下发的 secret> \
+node server.mjs
+```
+
+启用后访问 `/` 默认显示二维码：扫码关注「造悟者」公众号即可登录。首次微信登录的用户需要绑定一个已有的 `sk-proxy-…` API key 才能进入 dashboard，绑定后再次扫码自动登录。secret 切勿提交到仓库。
+
 ## Token 来源
 
 启动时按顺序尝试拿 Copilot token：
