@@ -107,11 +107,27 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // Dashboard (serves same HTML for / and /callback — SPA auth handled client-side)
+  // Routing:
+  //   /           → user dashboard (API key login) — default landing page
+  //   /user, /user/index.html → user dashboard (back-compat)
+  //   /_admin, /_admin/, /_admin/index.html → admin dashboard (Logto)
+  //   /callback   → admin dashboard HTML (Logto SPA handles the OAuth code exchange client-side;
+  //                 the Logto redirect URI is configured against the root origin so we keep it here)
   const pathname = req.url.split("?")[0];
-  if (req.method === "GET" && (pathname === "/" || pathname === "/index.html" || pathname === "/callback")) {
+  if (req.method === "GET" && (pathname === "/_admin" || pathname === "/_admin/" || pathname === "/_admin/index.html" || pathname === "/callback")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(dashboardHTML());
+    return;
+  }
+  if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+    try {
+      const html = readFileSync(join(PUBLIC_DIR, "user-dashboard.html"), "utf8").replace("__PORT__", PORT);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+    }
     return;
   }
 

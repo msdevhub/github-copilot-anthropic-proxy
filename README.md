@@ -17,8 +17,8 @@
 - 支持设备登录（`/api/device-login/*`）让用户自助生成 token
 
 **双 Dashboard**
-- 管理端 `/`（Logto 登录）：日志、Keys、Usage、Pricing、Audit、Charts
-- 用户端 `/user`（API key 登录）：自己的额度、用量、调用记录
+- 用户端 `/`（API key 登录，`/user` 兼容保留）：自己的额度、用量、调用记录
+- 管理端 `/_admin`（Logto 登录）：日志、Keys、Usage、Pricing、Audit、Charts
 
 **观测与审计**
 - SQLite 持久化每次请求：模型、状态、延迟、token、请求/响应体（截断）
@@ -31,7 +31,7 @@
 | `/v1/messages` `/v1/chat/completions` `/v1/models` | 对外 API |
 | `/api/keys` `/api/tokens` `/api/logs` `/api/stats/charts` | Dashboard 数据 |
 | `/api/device-login/start` `/poll` | OAuth 风格设备登录 |
-| `/admin/keys` `/usage` `/overview` `/pricing` `/audit` | 管理端 |
+| `/admin/keys` `/usage` `/overview` `/pricing` `/audit` | 管理端 API（dashboard 在 `/_admin`） |
 | `/user/me` `/logs` `/usage` `/stats` | 用户端 |
 | `/health` `/callback` | 健康检查 / OAuth 回调 |
 

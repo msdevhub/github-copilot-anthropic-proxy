@@ -592,7 +592,7 @@ async function initAuth() {
     // Handle callback from Logto
     if (window.location.pathname === '/callback') {
       await logtoClient.handleSignInCallback(window.location.href);
-      window.location.replace('/');
+      window.location.replace('/_admin');
       return;
     }
 
@@ -633,7 +633,7 @@ window.signIn = () => {
 
 window.signOut = async () => {
   await fetch('/api/__auth/session', { method: 'DELETE', credentials: 'same-origin' });
-  logtoClient.signOut(window.location.origin);
+  logtoClient.signOut(window.location.origin + '/_admin');
 };
 
 initAuth();
