@@ -156,30 +156,7 @@ async function userLogout() {
   location.replace('/');
 }
 
-// ─── Bind flow (first-time WeChat user) ────────────────────────────────────
-async function userBindKey() {
-  const key = document.getElementById('bind-key').value.trim();
-  const errEl = document.getElementById('bind-err');
-  errEl.textContent = '';
-  if (!key) { errEl.textContent = '请输入 API Key'; return; }
-  try {
-    const r = await fetch('/user/bind-key', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ apiKey: key }),
-    });
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}));
-      errEl.textContent = j.error || ('bind failed (' + r.status + ')');
-      return;
-    }
-    // Strip wx_pending=1 from URL and reload as fully-logged-in user
-    location.replace('/');
-  } catch (e) {
-    errEl.textContent = e.message;
-  }
-}
+// ─── Bind flow removed in stage 5 — wx scan now auto-creates the key ────────
 
 // ─── Dashboard data loaders ────────────────────────────────────────────────
 async function userRefresh() {
@@ -214,7 +191,52 @@ async function loadMe() {
     fill.classList.toggle('warn', pct >= 70 && pct < 95);
     fill.classList.toggle('full', pct >= 95);
   }
-  document.getElementById('q-reset').textContent = m.free_reset_at || '—';
+  document.getElementById('q-reset').textContent = m.free_reset_at || (m.source === 'wx_signup' ? '不重置（一次性赠送）' : '—');
+
+  // Upgrade banner: show when remaining < 10% of free_quota
+  const banner = document.getElementById('upgrade-banner');
+  if (banner) {
+    const remain = Math.max(0, (m.free_quota || 0) - (m.free_used || 0));
+    const ratio = m.free_quota ? remain / m.free_quota : 1;
+    const lowRemain = !m.unlimited && m.free_quota > 0 && ratio < 0.1;
+    banner.style.display = lowRemain ? '' : 'none';
+    if (lowRemain) {
+      const remainEl = document.getElementById('upgrade-remain');
+      if (remainEl) remainEl.textContent = SC.fmt(remain);
+    }
+  }
+
+  // Invite section
+  const inviteCard = document.getElementById('invite-card');
+  if (inviteCard) {
+    if (m.invite_code) {
+      inviteCard.style.display = '';
+      const cfg = await loadWxConfig();
+      // Build invite URL pointing to gateway (public scan entry) with ?ref=
+      const base = (cfg && cfg.gatewayBase) ? cfg.gatewayBase : location.origin;
+      const inviteUrl = `${base}/wx/qr/${encodeURIComponent(cfg && cfg.appName || '')}?ref=${m.invite_code}`;
+      const linkEl = document.getElementById('invite-link');
+      if (linkEl) linkEl.textContent = inviteUrl;
+      const codeEl = document.getElementById('invite-code');
+      if (codeEl) codeEl.textContent = m.invite_code;
+      const stats = m.invite_stats || { count: 0, reward_total: 0 };
+      const cntEl = document.getElementById('invite-count');
+      const rewEl = document.getElementById('invite-reward');
+      if (cntEl) cntEl.textContent = String(stats.count);
+      if (rewEl) rewEl.textContent = SC.fmt(stats.reward_total);
+    } else {
+      inviteCard.style.display = 'none';
+    }
+  }
+}
+
+function copyInviteLink(btn) {
+  const txt = document.getElementById('invite-link')?.textContent || '';
+  if (!txt) return;
+  navigator.clipboard.writeText(txt).then(() => {
+    const o = btn.textContent; btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = o; }, 1400);
+  });
 }
 
 async function loadLogs() {
@@ -277,14 +299,13 @@ async function loadUsage() {
 async function init() {
   const url = new URL(location.href);
   const wxErr = url.searchParams.get('err');
-  const wxPending = url.searchParams.get('wx_pending') === '1';
+  const wxNew = url.searchParams.get('wx_new') === '1';
 
   // Probe session
   const r = await fetch('/user/me', { credentials: 'same-origin' });
   if (r.status === 401) {
     document.getElementById('login-screen').style.display = '';
     document.getElementById('app').style.display = 'none';
-    document.getElementById('bind-screen').style.display = 'none';
     if (wxErr) {
       const errMsg = ({
         sig: '微信登录签名校验失败，请重试',
@@ -299,21 +320,13 @@ async function init() {
     return;
   }
 
-  const me = await r.json();
-  if (me && me.wx_pending) {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'none';
-    const bind = document.getElementById('bind-screen');
-    bind.style.display = '';
-    const who = document.getElementById('bind-who');
-    who.textContent = me.nickname ? `${me.nickname} (${me.wx_openid_short})` : me.wx_openid_short;
-    return;
-  }
-
   // Logged in normally
   document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('bind-screen').style.display = 'none';
   document.getElementById('app').style.display = '';
+  if (wxNew) {
+    const welcome = document.getElementById('welcome-banner');
+    if (welcome) welcome.style.display = '';
+  }
   const tip = document.getElementById('chart-tip');
   const canvas = document.getElementById('chart-hourly');
   const scroll = document.getElementById('chart-scroll');
@@ -321,8 +334,8 @@ async function init() {
   await userRefresh();
   pollTimer = setInterval(userRefresh, 5000);
 
-  // Strip wx_pending / err from URL after successful login
-  if (wxPending || wxErr) {
+  // Strip wx_new / err from URL after successful login
+  if (wxNew || wxErr) {
     const clean = location.pathname;
     history.replaceState(null, '', clean);
   }
@@ -331,7 +344,6 @@ async function init() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && document.activeElement) {
     if (document.activeElement.id === 'login-key') userLogin();
-    else if (document.activeElement.id === 'bind-key') userBindKey();
   }
 });
 

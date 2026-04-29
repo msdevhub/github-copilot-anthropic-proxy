@@ -99,17 +99,6 @@
     </div>
   </div>
 
-  <div id="bind-screen" class="login-wrap" style="display:none">
-    <div class="login-card">
-      <h1>绑定 API Key</h1>
-      <p>已识别微信账号 <span id="bind-who" style="color:var(--text-1);font-weight:600"></span>，请输入你已有的 API Key 完成绑定。绑定后下次扫码即直接登录。</p>
-      <input id="bind-key" type="password" placeholder="sk-proxy-..." autocomplete="off"/>
-      <div class="err" id="bind-err"></div>
-      <button onclick="userBindKey()">绑定并登录</button>
-      <button style="background:transparent;border:1px solid var(--border);color:var(--text-3);margin-top:8px" onclick="userLogout()">取消（重新登录）</button>
-    </div>
-  </div>
-
   <div id="app" style="display:none">
     <header class="hdr">
       <div class="hdr-left">
@@ -173,6 +162,26 @@ claude</pre>
         }
       </script>
 
+      <div id="welcome-banner" class="user-card" style="display:none;border-color:#3a8a3a;background:linear-gradient(90deg,rgba(58,138,58,.08),transparent)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:var(--text-1)">🎉 欢迎！我们已为您创建专属 API Key 并赠送 30 万 token</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:4px">额度一次性赠送（不重置）。在下方"Account"卡片中查看您的 Key。邀请好友扫码注册，双方各得 5 万额度。</div>
+          </div>
+          <button onclick="document.getElementById('welcome-banner').style.display='none'" style="background:transparent;border:1px solid var(--border);color:var(--text-3);padding:6px 12px;border-radius:6px;cursor:pointer">关闭</button>
+        </div>
+      </div>
+
+      <div id="upgrade-banner" class="user-card" style="display:none;border-color:#c97a2a;background:linear-gradient(90deg,rgba(201,122,42,.10),transparent)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:var(--text-1)">⚠️ 赠送额度即将用完（剩余 <span id="upgrade-remain">—</span> tokens）</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:4px">充值 ¥9.9 送 50 万 token / ¥29 送 200 万 token，更多优惠请关注公众号「造悟者」回复"更多额度"。</div>
+          </div>
+          <button onclick="alert('支付通道即将开放，请联系公众号客服')" style="background:#c97a2a;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:600">立即充值</button>
+        </div>
+      </div>
+
       <div class="user-grid">
         <div class="user-card" id="card-quota">
           <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">Free Quota</div>
@@ -228,6 +237,19 @@ claude</pre>
             <tbody id="logs-body"></tbody>
           </table>
         </div>
+      </div>
+
+      <div class="user-card" id="invite-card" style="display:none">
+        <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">邀请好友 · 双方各得 5 万额度</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="font-size:13px;color:var(--text-2)">已邀请 <strong id="invite-count" style="color:var(--text-1)">0</strong> 人 · 累计获得 <strong id="invite-reward" style="color:var(--text-1)">0</strong> tokens</div>
+          <div style="font-size:12px;color:var(--text-4)">邀请码：<span id="invite-code" style="color:var(--text-2);font-family:ui-monospace,monospace">—</span></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:stretch">
+          <code id="invite-link" style="flex:1;padding:8px 10px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;font-size:12px;overflow:auto;white-space:nowrap">—</code>
+          <button onclick="copyInviteLink(this)" style="padding:8px 14px;background:var(--bg-3);border:1px solid var(--border);color:var(--text-1);border-radius:6px;cursor:pointer;font-size:12px">复制邀请链接</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-4);margin-top:8px">💡 关注公众号「造悟者」回复"更多额度"获取额外奖励</div>
       </div>
     </div>
   </div>
