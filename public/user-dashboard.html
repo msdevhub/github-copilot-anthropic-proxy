@@ -178,7 +178,52 @@ claude</pre>
             <div style="font-size:14px;font-weight:600;color:var(--text-1)">⚠️ 赠送额度即将用完（剩余 <span id="upgrade-remain">—</span> tokens）</div>
             <div style="font-size:12px;color:var(--text-3);margin-top:4px">充值 ¥9.9 送 50 万 token / ¥29 送 200 万 token，更多优惠请关注公众号「造悟者」回复"更多额度"。</div>
           </div>
-          <button onclick="alert('支付通道即将开放，请联系公众号客服')" style="background:#c97a2a;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:600">立即充值</button>
+          <div style="display:flex;gap:8px">
+            <button onclick="window.startPayment('990')" style="background:#c97a2a;border:none;color:#fff;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600">¥9.9 / 50万</button>
+            <button onclick="window.startPayment('2900')" style="background:#7a3acc;border:none;color:#fff;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600">¥29 / 200万</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="user-card" id="paid-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">充值 token</div>
+            <div style="font-size:14px;font-weight:600;color:var(--text-1);margin-top:4px">付费余额：<span id="paid-quota">—</span> tokens</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:4px">个人微信收款码 + 人工审核到账（一般 5 分钟内）</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button onclick="window.startPayment('990')" style="background:#c97a2a;border:none;color:#fff;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600">¥9.9 / 50万</button>
+            <button onclick="window.startPayment('2900')" style="background:#7a3acc;border:none;color:#fff;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600">¥29 / 200万</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Payment modal -->
+      <div id="pay-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
+        <div style="background:var(--bg-1,#1a1a1a);border:1px solid var(--border,#333);border-radius:8px;padding:24px;max-width:420px;width:92%;max-height:90vh;overflow:auto">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div style="font-size:16px;font-weight:600" id="pay-title">扫码付款</div>
+            <button onclick="window.closePayment()" style="background:transparent;border:none;color:var(--text-3);font-size:20px;cursor:pointer">×</button>
+          </div>
+          <div id="pay-body">
+            <div id="pay-qrwrap" style="text-align:center">
+              <img id="pay-qr" src="" alt="收款二维码" style="max-width:280px;width:100%;background:#fff;border-radius:6px;padding:8px"/>
+            </div>
+            <div style="margin-top:14px;border:2px solid #d33;background:#fff3f3;color:#900;border-radius:8px;padding:14px;text-align:center;font-family:monospace">
+              <div style="font-size:14px;font-weight:600;margin-bottom:6px">付款时务必填写备注</div>
+              <div id="pay-remark" style="font-size:32px;font-weight:700;letter-spacing:4px">—</div>
+              <div style="font-size:12px;margin-top:6px">否则到账延迟 24 小时以上</div>
+            </div>
+            <div style="margin-top:14px;display:flex;justify-content:space-between;font-size:12px;color:var(--text-3)">
+              <span>金额：¥<span id="pay-amount">—</span></span>
+              <span>状态：<span id="pay-status">pending</span></span>
+            </div>
+            <div id="pay-actions" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+              <button id="pay-claim-btn" onclick="window.claimPayment()" style="background:#3a8a3a;border:none;color:#fff;padding:10px 18px;border-radius:6px;cursor:pointer;font-weight:600">我已付款</button>
+            </div>
+            <div id="pay-msg" style="margin-top:10px;font-size:12px;color:var(--text-3)"></div>
+          </div>
         </div>
       </div>
 

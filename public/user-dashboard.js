@@ -177,6 +177,8 @@ async function loadMe() {
   document.getElementById('q-used').textContent = SC.fmt(m.free_used || 0);
   document.getElementById('q-total').textContent = m.unlimited ? '∞' : SC.fmt(m.free_quota || 0);
   document.getElementById('bal').textContent = m.unlimited ? '∞' : SC.fmt(m.balance_tokens || 0);
+  const paidEl = document.getElementById('paid-quota');
+  if (paidEl) paidEl.textContent = m.unlimited ? '∞' : SC.fmt(m.paid_quota || 0);
   const pill = document.getElementById('status-pill');
   pill.className = 'pill';
   if (m.unlimited) { pill.textContent = 'unlimited'; pill.classList.add('unl'); }
@@ -348,3 +350,85 @@ document.addEventListener('keydown', (e) => {
 });
 
 init();
+
+// ─── Payment flow (wx-gateway personal_qr) ─────────────────────────────────
+let _payState = { payOrderId: null, pollTimer: null };
+
+window.startPayment = async function(pkgId) {
+  const r = await fetch('/api/pay/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ package: pkgId }),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    alert('创建订单失败：' + (data.error || r.status));
+    return;
+  }
+  _payState.payOrderId = data.payOrderId;
+  document.getElementById('pay-qr').src = data.qrcodeUrl;
+  document.getElementById('pay-remark').textContent = data.remark;
+  document.getElementById('pay-amount').textContent = (data.amount_fen / 100).toFixed(2);
+  document.getElementById('pay-status').textContent = 'pending';
+  document.getElementById('pay-msg').textContent = '';
+  document.getElementById('pay-claim-btn').disabled = false;
+  document.getElementById('pay-modal').style.display = 'flex';
+  _startPaymentPoll();
+};
+
+window.claimPayment = async function() {
+  if (!_payState.payOrderId) return;
+  const btn = document.getElementById('pay-claim-btn');
+  btn.disabled = true;
+  const r = await fetch('/api/pay/claim', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ payOrderId: _payState.payOrderId }),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    document.getElementById('pay-msg').textContent = '提交失败：' + (data.error || r.status);
+    btn.disabled = false;
+    return;
+  }
+  document.getElementById('pay-status').textContent = 'submitted';
+  document.getElementById('pay-msg').textContent = '已提交，等待审核（一般 5 分钟内到账，可关闭此窗口）';
+};
+
+window.closePayment = function() {
+  document.getElementById('pay-modal').style.display = 'none';
+  if (_payState.pollTimer) { clearInterval(_payState.pollTimer); _payState.pollTimer = null; }
+  _payState.payOrderId = null;
+};
+
+function _setPayMsg(text, color) {
+  const el = document.getElementById('pay-msg');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = color || '';
+  el.style.fontWeight = color ? '600' : '';
+}
+
+function _startPaymentPoll() {
+  if (_payState.pollTimer) clearInterval(_payState.pollTimer);
+  _payState.pollTimer = setInterval(async () => {
+    if (!_payState.payOrderId) return;
+    try {
+      const r = await fetch('/api/pay/status/' + encodeURIComponent(_payState.payOrderId), { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const p = await r.json();
+      const sEl = document.getElementById('pay-status');
+      if (sEl) sEl.textContent = p.status;
+      if (p.status === 'paid') {
+        _setPayMsg('付款成功！已到账 ' + SC.fmt(p.tokens_to_grant) + ' tokens', '#3a8a3a');
+        clearInterval(_payState.pollTimer); _payState.pollTimer = null;
+        await loadMe();
+      } else if (p.status === 'expired' || p.status === 'disputed') {
+        _setPayMsg(p.status === 'expired' ? '订单已过期，请重新发起' : ('已驳回：' + (p.reject_reason || '请联系客服')), '#c0392b');
+        clearInterval(_payState.pollTimer); _payState.pollTimer = null;
+      }
+    } catch {}
+  }, 5000);
+}
