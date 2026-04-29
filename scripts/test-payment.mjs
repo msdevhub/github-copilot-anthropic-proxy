@@ -25,10 +25,10 @@ function readBody(req) {
     const c = []; req.on("data", b => c.push(b)); req.on("end", () => resolve(Buffer.concat(c).toString()));
   });
 }
-function verifyAppSig(req, body) {
+function verifyAppSig(req, payload) {
   const sig = req.headers["x-wx-sig"]; const ts = req.headers["x-wx-ts"];
   if (!sig || !ts || !req.headers["x-wx-app-name"]) return false;
-  const expected = createHmac("sha256", SECRET).update(body).digest("hex");
+  const expected = createHmac("sha256", SECRET).update(payload).digest("hex");
   try {
     const a = Buffer.from(expected, "hex"); const b = Buffer.from(sig, "hex");
     return a.length === b.length && timingSafeEqual(a, b);
@@ -37,9 +37,12 @@ function verifyAppSig(req, body) {
 
 const mockGw = createServer(async (req, res) => {
   const body = await readBody(req);
+  const ts = req.headers["x-wx-ts"];
+  const appName = req.headers["x-wx-app-name"];
   if (req.url === "/pay/create" && req.method === "POST") {
-    if (!verifyAppSig(req, body)) { res.writeHead(403); res.end(JSON.stringify({ error: "bad_sig" })); return; }
     const parsed = JSON.parse(body);
+    const payload = `${appName}|${parsed.orderId}|${parsed.amount_fen}|${ts}`;
+    if (!verifyAppSig(req, payload)) { res.writeHead(403); res.end(JSON.stringify({ error: "bad_sig" })); return; }
     const payOrderId = "pay_" + randomBytes(8).toString("hex");
     const remark = "K" + randomBytes(3).toString("hex").toUpperCase().slice(0, 5);
     const expiresAt = new Date(Date.now() + (parsed.expiresIn || 1800) * 1000).toISOString();
@@ -52,8 +55,9 @@ const mockGw = createServer(async (req, res) => {
     return;
   }
   if (req.url === "/pay/personal/claim" && req.method === "POST") {
-    if (!verifyAppSig(req, body)) { res.writeHead(403); res.end("bad_sig"); return; }
     const { payOrderId } = JSON.parse(body);
+    const payload = `${appName}|${payOrderId}|${ts}`;
+    if (!verifyAppSig(req, payload)) { res.writeHead(403); res.end("bad_sig"); return; }
     const o = mockOrders.get(payOrderId);
     if (!o) { res.writeHead(404); res.end(JSON.stringify({ error: "not_found" })); return; }
     o.status = "submitted";
