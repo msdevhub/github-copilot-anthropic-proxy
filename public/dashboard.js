@@ -1,35 +1,16 @@
 let autoRefresh = true, timer, filters = {};
 let currentTab = 'logs';
 
-// ─── Auto-refresh session on 401 ──────────────────────────────────────────
-// The dashboard session cookie is in-memory on the server; if the server
-// restarts or the 24h cookie expires while the Logto SSO is still valid,
-// we re-create the session cookie transparently and retry once.
+// ─── Auto-bounce on 401 ───────────────────────────────────────────────────
+// /admin/* and /api/* require an admin user_session. If we get 401, the
+// session expired or was revoked — bounce to the login page.
 (function installFetchAuthInterceptor() {
   const _fetch = window.fetch.bind(window);
-  let refreshing = null;
-  async function refreshSession() {
-    if (refreshing) return refreshing;
-    refreshing = (async () => {
-      try {
-        const client = window._logtoClient;
-        if (client && await client.isAuthenticated()) {
-          await _fetch('/api/__auth/session', { method: 'POST', credentials: 'same-origin' });
-          return true;
-        }
-      } catch (e) { console.warn('session refresh failed', e); }
-      return false;
-    })().finally(() => { refreshing = null; });
-    return refreshing;
-  }
   window.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
     const res = await _fetch(input, init);
-    if (res.status === 401 && url && url.startsWith('/api/') && !url.startsWith('/api/__auth/')) {
-      const ok = await refreshSession();
-      if (ok) return _fetch(input, init);
-      // Re-auth failed → bounce to login
-      window.location.reload();
+    if (res.status === 401 && url && (url.startsWith('/api/') || url.startsWith('/admin/'))) {
+      window.location.replace('/?next=' + encodeURIComponent(window.location.pathname));
     }
     return res;
   };

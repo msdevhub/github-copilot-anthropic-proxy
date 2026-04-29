@@ -11,23 +11,8 @@
 </head>
 <body>
 
-<!-- Loading screen (shown while checking auth) -->
-<div id="loading-screen" class="auth-loading">
-  <div class="auth-loading-spinner"></div>
-</div>
-
-<!-- Login screen (shown when not authenticated) -->
-<div id="login-screen" class="auth-login" style="display:none">
-  <div class="auth-card">
-    <div class="hdr-mark" style="width:32px;height:32px;border-radius:8px;margin-bottom:16px"></div>
-    <h1 class="auth-title">Copilot Proxy</h1>
-    <p class="auth-sub">Sign in to access the dashboard.</p>
-    <button class="auth-btn" onclick="signIn()">Sign in with Logto</button>
-  </div>
-</div>
-
-<!-- Dashboard (hidden until authenticated) -->
-<div id="app" style="display:none">
+<!-- Dashboard (server already gated this page on admin user_session) -->
+<div id="app">
 
 <header class="hdr">
   <div class="hdr-left">
@@ -42,7 +27,7 @@
     <button class="btn" onclick="refresh()">Refresh</button>
     <button class="btn on" onclick="toggleAuto()" id="btn-auto">Live</button>
     <div class="hdr-sep"></div>
-    <span class="hdr-user" id="hdr-user"></span>
+    <span class="hdr-user" id="hdr-user">已登录为 __ADMIN_NAME__（admin）</span>
     <button class="btn" onclick="signOut()" id="btn-logout">Logout</button>
     <a class="btn" href="/user" title="User self-service view" style="text-decoration:none">User View</a>
   </div>
@@ -572,71 +557,14 @@ claude</pre>
 
 </div><!-- end #app -->
 
-<!-- Logto Browser SDK -->
-<script type="module">
-import LogtoClient from 'https://esm.sh/@logto/browser';
-
-const logtoClient = new LogtoClient({
-  endpoint: 'https://logto.dr.restry.cn',
-  appId: 'o56bvf8eszd31vthks7i3',
-});
-
-window._logtoClient = logtoClient;
-
-async function initAuth() {
-  const loadingEl = document.getElementById('loading-screen');
-  const loginEl = document.getElementById('login-screen');
-  const appEl = document.getElementById('app');
-
-  try {
-    // Handle callback from Logto
-    if (window.location.pathname === '/callback') {
-      await logtoClient.handleSignInCallback(window.location.href);
-      window.location.replace('/_admin');
-      return;
-    }
-
-    const isAuth = await logtoClient.isAuthenticated();
-
-    if (isAuth) {
-      // Create server-side session cookie
-      await fetch('/api/__auth/session', { method: 'POST', credentials: 'same-origin' });
-
-      // Get user info and show dashboard
-      const claims = await logtoClient.getIdTokenClaims();
-      const userName = claims.name || claims.email || claims.username || claims.sub;
-      document.getElementById('hdr-user').textContent = userName;
-
-      loadingEl.style.display = 'none';
-      appEl.style.display = '';
-
-      // Load dashboard JS
-      const script = document.createElement('script');
-      script.src = '/dashboard.js';
-      document.body.appendChild(script);
-    } else {
-      // Show login screen
-      loadingEl.style.display = 'none';
-      loginEl.style.display = '';
-    }
-  } catch (err) {
-    console.error('Auth init error:', err);
-    // On error, show login screen
-    loadingEl.style.display = 'none';
-    loginEl.style.display = '';
-  }
-}
-
-window.signIn = () => {
-  logtoClient.signIn(window.location.origin + '/callback');
-};
-
+<script>
 window.signOut = async () => {
-  await fetch('/api/__auth/session', { method: 'DELETE', credentials: 'same-origin' });
-  logtoClient.signOut(window.location.origin + '/_admin');
+  try {
+    await fetch('/user/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch {}
+  window.location.replace('/');
 };
-
-initAuth();
 </script>
+<script src="/dashboard.js"></script>
 </body>
 </html>

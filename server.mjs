@@ -11,7 +11,7 @@ import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_
 import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
-import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext } from "./lib/auth.mjs";
+import { checkApiKey, checkAdmin, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext } from "./lib/auth.mjs";
 import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request } from "./lib/keys-v2.mjs";
@@ -65,9 +65,9 @@ let isShuttingDown = false;
 const deviceLoginSessions = new Map();
 
 // --- Dashboard HTML ---
-function dashboardHTML() {
+function dashboardHTML(adminName = "") {
   const html = readFileSync(DASHBOARD_PATH, "utf8");
-  return html.replace("__PORT__", PORT);
+  return html.replace("__PORT__", PORT).replace("__ADMIN_NAME__", String(adminName).replace(/[<>"&]/g, ""));
 }
 
 // --- Proxy ---
@@ -123,14 +123,24 @@ async function handleRequest(req, res) {
   // Routing:
   //   /           → user dashboard (API key login) — default landing page
   //   /user, /user/index.html → user dashboard (back-compat)
-  //   /_admin, /_admin/, /_admin/index.html → admin dashboard (Logto)
-  //   /callback   → admin dashboard HTML (Logto SPA handles the OAuth code exchange client-side;
-  //                 the Logto redirect URI is configured against the root origin so we keep it here)
+  //   ADMIN_PATH  → admin dashboard (gated by user_session + role=admin)
   const pathname = req.url.split("?")[0];
   const ADMIN_PATH = process.env.ADMIN_PATH || "/_a/ce233c02438f1ea04adaeb0c703468eb";
-  if (req.method === "GET" && (pathname === ADMIN_PATH || pathname === ADMIN_PATH + "/" || pathname === ADMIN_PATH + "/index.html" || pathname === "/callback")) {
+  if (req.method === "GET" && (pathname === ADMIN_PATH || pathname === ADMIN_PATH + "/" || pathname === ADMIN_PATH + "/index.html")) {
+    const ctx = getUserSessionContext(req);
+    if (!ctx) {
+      res.writeHead(302, { Location: `/?next=${encodeURIComponent(ADMIN_PATH)}` });
+      res.end();
+      return;
+    }
+    const row = getKeyByHash(ctx.keyHash);
+    if (!row || row.status === "disabled" || row.role !== "admin") {
+      res.writeHead(302, { Location: "/?err=not_admin" });
+      res.end();
+      return;
+    }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(dashboardHTML());
+    res.end(dashboardHTML(row.name || ""));
     return;
   }
   if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
@@ -157,23 +167,6 @@ async function handleRequest(req, res) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found");
     }
-    return;
-  }
-
-  // ── Dashboard session management ──────────────────────────────────────────
-  // POST /api/__auth/session — create a session cookie (called by client after Logto auth)
-  if (req.method === "POST" && req.url === "/api/__auth/session") {
-    const { token, headers } = createDashboardSession();
-    res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": `dash_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400` });
-    res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  // DELETE /api/__auth/session — destroy session (logout)
-  if (req.method === "DELETE" && req.url === "/api/__auth/session") {
-    destroyDashboardSession(req);
-    res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": "dash_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
-    res.end(JSON.stringify({ ok: true }));
     return;
   }
 
@@ -377,11 +370,13 @@ async function handleRequest(req, res) {
   }
 
   // ── Dashboard API auth guard ──────────────────────────────────────────────
-  // All /api/ routes below require a valid dashboard session (except proxy API key routes)
-  if (req.url.startsWith("/api/") && !req.url.startsWith("/api/__auth/")) {
-    if (!checkDashboardSession(req)) {
+  // All /api/ routes below require an admin user_session.
+  if (req.url.startsWith("/api/")) {
+    const ctx = getUserSessionContext(req);
+    const row = ctx ? getKeyByHash(ctx.keyHash) : null;
+    if (!row || row.status === "disabled" || row.role !== "admin") {
       res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Unauthorized — please sign in" }));
+      res.end(JSON.stringify({ error: "Unauthorized — admin sign-in required" }));
       return;
     }
   }
@@ -845,18 +840,22 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // ── Admin API (Stage 2) — requires admin v2 key OR a dashboard session ────
+  // ── Admin API (Stage 2) — admin user_session OR admin v2 api key (header) ──
   if (req.url.startsWith("/admin/")) {
-    const session = checkDashboardSession(req);
-    const adm = session ? { ok: true } : checkAdmin(req);
-    if (!adm.ok) {
-      res.writeHead(adm.reason === "no_key" || adm.reason === "not_found" ? 401 : 403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: { type: "auth_error", reason: adm.reason } }));
+    const ctx = getUserSessionContext(req);
+    const sessionRow = ctx ? getKeyByHash(ctx.keyHash) : null;
+    const sessionAdmin = sessionRow && sessionRow.status !== "disabled" && sessionRow.role === "admin"
+      ? sessionRow : null;
+    const apiAdm = sessionAdmin ? null : checkAdmin(req);
+    if (!sessionAdmin && !(apiAdm && apiAdm.ok)) {
+      const reason = apiAdm ? apiAdm.reason : "no_session";
+      res.writeHead(reason === "no_key" || reason === "not_found" || reason === "no_session" ? 401 : 403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "auth_error", reason } }));
       return;
     }
-    const adminCtx = session
-      ? { source: "dashboard", adminKeyHash: null, adminName: "dashboard" }
-      : { source: "apikey", adminKeyHash: adm.keyRow?.key_hash || null, adminName: adm.keyRow?.name || null };
+    const adminCtx = sessionAdmin
+      ? { source: "session", adminKeyHash: sessionAdmin.key_hash, adminName: sessionAdmin.name || "admin" }
+      : { source: "apikey", adminKeyHash: apiAdm.keyRow?.key_hash || null, adminName: apiAdm.keyRow?.name || null };
     await handleAdmin(req, res, adminCtx);
     return;
   }
@@ -1358,19 +1357,17 @@ async function handleAdmin(req, res, adminCtx = { source: "unknown", adminKeyHas
 async function handleUserApi(req, res) {
   const send = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
 
-  // Resolve who's calling. Admin dashboard session sees all keys (admin view);
-  // user_session sees only its own. Anything else is unauthorized.
+  // Resolve who's calling. Admin user_session sees all keys (admin view);
+  // regular user_session sees only its own. Anything else is unauthorized.
   let scopeHash = null;     // null = unrestricted (admin)
   let viewerKey = null;     // key row for /user/me (when scoped)
-  if (checkDashboardSession(req)) {
+  const ctx = getUserSessionContext(req);
+  if (!ctx) return send(401, { error: "unauthorized — POST /user/login first" });
+  viewerKey = getKeyByHash(ctx.keyHash);
+  if (!viewerKey || viewerKey.status === "disabled") return send(401, { error: "session key disabled or missing" });
+  if (viewerKey.role === "admin") {
     scopeHash = null;
-    // For /user/me with admin session, surface the dashboard session as a virtual admin row
-    // (so the page renders something sensible); allow ?key_hash=... override.
   } else {
-    const ctx = getUserSessionContext(req);
-    if (!ctx) return send(401, { error: "unauthorized — POST /user/login first" });
-    viewerKey = getKeyByHash(ctx.keyHash);
-    if (!viewerKey || viewerKey.status === "disabled") return send(401, { error: "session key disabled or missing" });
     scopeHash = ctx.keyHash;
   }
 
@@ -1905,7 +1902,7 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`   Dashboard: http://127.0.0.1:${PORT}/`);
   console.log(`   DB:        ${DB_PATH}`);
   console.log(`   API keys:  ${apiKeysConfigured ? `${apiKeysConfigured} key(s) configured (${API_KEYS_PATH})` : "none — all requests allowed (add keys with --add-key)"}`);
-  console.log(`   Dash auth: Logto SSO (${process.env.LOGTO_ENDPOINT || 'https://logto.dr.restry.cn'})`);
+  console.log(`   Dash auth: user_session (role=admin)`);
   // Log active token info
   const { token: activeGH, name: activeTokenName } = getActiveGitHubToken();
   if (activeGH) {
