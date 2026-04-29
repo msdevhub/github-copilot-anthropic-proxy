@@ -293,13 +293,13 @@ async function handleRequest(req, res) {
     }
 
     // Look up bound API key (if any)
-    const boundKey = db.prepare("SELECT key_hash, status FROM api_keys_v2 WHERE wx_openid = ? LIMIT 1").get(openid);
+    const boundKey = db.prepare("SELECT key_hash, status, display_raw FROM api_keys_v2 WHERE wx_openid = ? LIMIT 1").get(openid);
 
     let cookieValue;
     let location;
     if (boundKey && boundKey.status !== "disabled") {
       // Already bound → mint a normal user session and go to dashboard
-      const tok = createUserSession(boundKey.key_hash);
+      const tok = createUserSession(boundKey.key_hash, boundKey.display_raw || null);
       cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
       location = "/";
     } else {
