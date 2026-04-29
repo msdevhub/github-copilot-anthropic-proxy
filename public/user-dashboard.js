@@ -24,11 +24,29 @@ function currentKeyForCmd() {
 }
 
 function resTemplates(k) {
+  const openclawJson = `{
+  "models": {
+    "providers": {
+      "copilot-proxy": {
+        "baseUrl": "${RES_BASE_ANTHROPIC}",
+        "apiKey": "${k}",
+        "api": "anthropic-messages",
+        "authHeader": true,
+        "models": [
+          { "id": "copilot-proxy/claude-opus-4-7" },
+          { "id": "copilot-proxy/claude-sonnet-4-6" }
+        ]
+      }
+    }
+  },
+  "agents": { "defaults": { "model": { "primary": "copilot-proxy/claude-opus-4-7" } } }
+}`;
   return {
     cc: `npm i -g @anthropic-ai/claude-code\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nclaude`,
     oc: `npm i -g opencode-ai\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nopencode`,
     cx: `npm i -g @openai/codex\nexport OPENAI_BASE_URL=${RES_BASE_OPENAI}\nexport OPENAI_API_KEY=${k}\ncodex`,
-    ow: `hermes config set provider.anthropic.base_url ${RES_BASE_ANTHROPIC}\nhermes config set provider.anthropic.api_key ${k}`,
+    ow: `# 1) 安装\ncurl -fsSL https://openclaw.ai/install.sh | bash\n\n# 2) 编辑 ~/.openclaw/openclaw.json\n${openclawJson}\n\n# 3) 应用配置\nopenclaw gateway config.apply --file ~/.openclaw/openclaw.json`,
+    hm: `hermes config set provider.anthropic.base_url ${RES_BASE_ANTHROPIC}\nhermes config set provider.anthropic.api_key ${k}`,
   };
 }
 
@@ -50,6 +68,7 @@ function renderResources(m) {
   setPre('res-oc-pre', t.oc);
   setPre('res-cx-pre', t.cx);
   setPre('res-ow-pre', t.ow);
+  setPre('res-hm-pre', t.hm);
 }
 
 window.resToggle = function() {
@@ -83,7 +102,7 @@ window.resCopyKey = function(btn) {
 
 window.resSwitch = function(k) {
   document.querySelectorAll('[data-rk]').forEach(t => t.classList.toggle('active', t.dataset.rk === k));
-  ['cc','oc','cx','ow'].forEach(id => {
+  ['cc','oc','cx','ow','hm'].forEach(id => {
     const p = document.getElementById('res-' + id);
     if (p) p.style.display = (id === k) ? '' : 'none';
   });
