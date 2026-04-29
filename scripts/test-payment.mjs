@@ -90,6 +90,7 @@ const env = {
   WX_GATEWAY_APP_NAME: APP_NAME,
   WX_GATEWAY_SECRET: SECRET,
   WX_SIGNUP_IP_LIMIT: "20",
+  TRUST_PROXY: "true",
 };
 
 const proc = spawn("node", ["server.mjs"], { env, stdio: ["ignore", "pipe", "pipe"] });

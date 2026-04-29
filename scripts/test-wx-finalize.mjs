@@ -31,6 +31,8 @@ const env = {
   WX_GATEWAY_SECRET: SECRET,
   WX_SIGNUP_IP_LIMIT: "3",
   WX_INVITE_REWARD: "50000",
+  WX_INVITE_SETTLE_THRESHOLD: "10000",
+  TRUST_PROXY: "true",
 };
 
 const proc = spawn("node", ["server.mjs"], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -105,19 +107,36 @@ try {
   const dupCount = tdb.prepare("SELECT COUNT(*) AS c FROM api_keys_v2 WHERE wx_openid = ?").get(oid1).c;
   check("only one key per openid", dupCount === 1, `got ${dupCount}`);
 
-  // 5) Invite flow: new openid scans with ?ref=<inviterCode>
+  // 5) Invite flow (deferred): new openid scans with ?ref=<inviterCode>
+  //    — wx_invites row created with reward_status='pending'; quotas unchanged.
   const oid2 = "oTestB" + Math.floor(Math.random() * 1e9);
   r = await finalize({ openid: oid2, ref: inviterCode, forwardedFor: "5.6.7.8" });
   check("invitee finalize → 302", r.status === 302);
   const cookie2 = r.headers.get("set-cookie").split(";")[0];
   r = await fetch(`http://127.0.0.1:${PORT}/user/me`, { headers: { cookie: cookie2 } });
   const me2 = await r.json();
-  check("invitee free_quota = 350000 (300k + 50k reward)", me2.free_quota === 350000, `got ${me2.free_quota}`);
-  // inviter should also have +50k
+  check("invitee free_quota = 300000 (reward deferred until consumption)", me2.free_quota === 300000, `got ${me2.free_quota}`);
+  // inviter unchanged too
   r = await fetch(`http://127.0.0.1:${PORT}/user/me`, { headers: { cookie } });
   const me1again = await r.json();
-  check("inviter free_quota = 350000", me1again.free_quota === 350000, `got ${me1again.free_quota}`);
+  check("inviter free_quota = 300000 (deferred)", me1again.free_quota === 300000, `got ${me1again.free_quota}`);
   check("inviter invite_stats.count >= 1", (me1again.invite_stats?.count || 0) >= 1, JSON.stringify(me1again.invite_stats));
+  // wx_invites row should be pending
+  const tdb2 = new DatabaseSync(DB_PATH);
+  const inviteeKeyHash = tdb2.prepare("SELECT key_hash FROM api_keys_v2 WHERE wx_openid = ?").get(oid2).key_hash;
+  const invRow = tdb2.prepare("SELECT * FROM wx_invites WHERE invitee_key_hash = ?").get(inviteeKeyHash);
+  check("wx_invites.reward_status = pending", invRow && invRow.reward_status === "pending", JSON.stringify(invRow));
+
+  // 5b) Simulate the invitee consuming >= threshold tokens, then re-fetch /user/me.
+  //     The /user/me handler runs lazy settlement; both sides should jump by +50k.
+  tdb2.prepare(`INSERT INTO usage_ledger (ts, key_hash, model, input_tokens, output_tokens, cost_tokens, source, log_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(new Date().toISOString(), inviteeKeyHash, "test-model", 5000, 5500, 10500, "free", null);
+  const me2b = await (await fetch(`http://127.0.0.1:${PORT}/user/me`, { headers: { cookie: cookie2 } })).json();
+  check("after threshold: invitee free_quota = 350000", me2b.free_quota === 350000, `got ${me2b.free_quota}`);
+  const me1b = await (await fetch(`http://127.0.0.1:${PORT}/user/me`, { headers: { cookie } })).json();
+  check("after threshold: inviter free_quota = 350000", me1b.free_quota === 350000, `got ${me1b.free_quota}`);
+  const invSettled = tdb2.prepare("SELECT reward_status FROM wx_invites WHERE invitee_key_hash = ?").get(inviteeKeyHash);
+  check("wx_invites.reward_status = settled", invSettled.reward_status === "settled");
 
   // 6) Self-invite → no extra reward
   const oid3 = "oTestC" + Math.floor(Math.random() * 1e9);
