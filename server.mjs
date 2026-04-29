@@ -14,10 +14,10 @@ import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getA
 import { checkApiKey, checkAdmin, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext } from "./lib/auth.mjs";
 import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
-import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request } from "./lib/keys-v2.mjs";
+import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request, maybeSettleInvite } from "./lib/keys-v2.mjs";
 import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing } from "./lib/pricing.mjs";
 import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
-import { createPayment, claimPayment, syncPaymentStatus, getPaymentByPayOrderId, listPaymentsByKey, applyWebhookEvent, verifyWebhookSig, PACKAGES } from "./lib/payments.mjs";
+import { createPayment, claimPayment, syncPaymentStatus, getPaymentByPayOrderId, listPaymentsByKey, applyWebhookEvent, verifyWebhookSig, sweepExpiredPayments, PACKAGES } from "./lib/payments.mjs";
 
 reloadPricing();
 
@@ -32,6 +32,20 @@ if (WX_LOGIN_ENABLED) {
   console.log("[wx] login disabled — set WX_GATEWAY_BASE / WX_GATEWAY_APP_NAME / WX_GATEWAY_SECRET to enable");
 }
 const WX_MAX_SKEW_MS = 5 * 60 * 1000;
+
+// Trust X-Forwarded-For only when explicitly enabled (e.g. behind nginx).
+// Otherwise spoofable headers are ignored; we use the raw socket address.
+const TRUST_PROXY = ["true", "1", "yes"].includes(String(process.env.TRUST_PROXY || "").toLowerCase());
+function getClientIp(req) {
+  if (TRUST_PROXY) {
+    const xff = (req.headers["x-forwarded-for"] || "").toString();
+    if (xff) {
+      const first = xff.split(",")[0].trim();
+      if (first) return first;
+    }
+  }
+  return req.socket?.remoteAddress || "unknown";
+}
 
 // ─── CLI: --add-key <name> ───────────────────────────────────────────────────
 const addKeyIdx = process.argv.indexOf("--add-key");
@@ -289,9 +303,7 @@ async function handleRequest(req, res) {
     } else {
       // ── First-time signup: auto-create a wx_signup key with 30万 free quota ──
       // Anti-abuse: per-IP throttle (24h max WX_SIGNUP_IP_LIMIT new openids).
-      const clientIp = (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim()
-        || req.socket?.remoteAddress
-        || "unknown";
+      const clientIp = getClientIp(req);
       const ipLimit = Number(process.env.WX_SIGNUP_IP_LIMIT || 3);
       const oneDayAgo = new Date(Date.now() - 24 * 3600_000).toISOString();
       try {
@@ -315,19 +327,33 @@ async function handleRequest(req, res) {
         db.prepare("INSERT INTO wx_signup_ip_log (ip, openid, created_at) VALUES (?, ?, ?)").run(clientIp, openid, new Date().toISOString());
       } catch {}
 
-      // Invite reward: ?ref=<invite_code>. Both inviter and invitee +50k. Self-invite blocked.
+      // ── Invite: ?ref=<invite_code>. Reward is DEFERRED — recorded as 'pending'
+      // and settled later when the invitee's cumulative usage crosses
+      // WX_INVITE_SETTLE_THRESHOLD (default 10k tokens). Defends against
+      // self-invite / drive-by reward farming.
       const ref = (sp.get("ref") || "").trim();
       const REWARD = Number(process.env.WX_INVITE_REWARD || 50_000);
+      const INVITE_IP_LIMIT = Number(process.env.WX_INVITE_IP_LIMIT || 5);
       if (ref && REWARD > 0) {
         try {
           const inviter = getKeyByInviteCode(ref);
-          if (inviter && inviter.wx_openid && inviter.wx_openid !== openid && inviter.status !== "disabled") {
-            addFreeQuota(inviter.key_hash, REWARD);
-            addFreeQuota(newKey.key_hash, REWARD);
-            db.prepare("INSERT INTO wx_invites (inviter_key_hash, invitee_key_hash, invitee_openid, reward_tokens, created_at) VALUES (?, ?, ?, ?, ?)").run(inviter.key_hash, newKey.key_hash, openid, REWARD, new Date().toISOString());
-            console.log(`[wx][invite] ${ref} → +${REWARD} both keys`);
+          if (!inviter || inviter.status === "disabled") { /* unknown ref — ignore */ }
+          else if (inviter.wx_openid === openid) { /* explicit self-invite — ignore */ }
+          else {
+            // 24h IP-cap: count invites whose invitee signed up from the same IP
+            const recentSameIp = db.prepare(`
+              SELECT COUNT(*) AS c FROM wx_invites wi
+              WHERE wi.inviter_ip = ? AND wi.created_at >= ?
+            `).get(clientIp, oneDayAgo).c;
+            if (recentSameIp >= INVITE_IP_LIMIT) {
+              console.warn(`[wx][invite-ip-cap] ip=${clientIp} recent=${recentSameIp} >= ${INVITE_IP_LIMIT} — invite recorded but no reward`);
+            } else {
+              db.prepare(`INSERT INTO wx_invites (inviter_key_hash, invitee_key_hash, invitee_openid, reward_tokens, created_at, reward_status, inviter_ip) VALUES (?, ?, ?, ?, ?, 'pending', ?)`)
+                .run(inviter.key_hash, newKey.key_hash, openid, REWARD, new Date().toISOString(), clientIp);
+              console.log(`[wx][invite] pending: ${ref} → invitee ${newKey.prefix}… (settles after ${process.env.WX_INVITE_SETTLE_THRESHOLD || 10000} tokens consumed)`);
+            }
           }
-        } catch (e) { console.error("[wx] invite reward failed:", e.message); }
+        } catch (e) { console.error("[wx] invite insert failed:", e.message); }
       }
 
       console.log(`[wx][signup] openid=${openid.slice(0,8)}… key=${newKey.prefix}… ip=${clientIp}`);
@@ -1376,7 +1402,7 @@ async function handleUserApi(req, res) {
 
   // GET /user/me
   if (req.method === "GET" && path === "/user/me") {
-    const row = viewerKey || (scopeHash === null ? null : getKeyByHash(scopeHash));
+    let row = viewerKey || (scopeHash === null ? null : getKeyByHash(scopeHash));
     if (!row) {
       return send(200, {
         name: "(admin)", role: "admin", key_prefix: null,
@@ -1385,6 +1411,12 @@ async function handleUserApi(req, res) {
         is_admin_view: true,
       });
     }
+    // Lazy invite settlement: if this user is a pending invitee whose usage
+    // crossed the threshold, credit both sides before reporting their quota.
+    try {
+      const r = maybeSettleInvite(row.key_hash);
+      if (r && r.settled) row = getKeyByHash(row.key_hash) || row;
+    } catch {}
     let allowed = null;
     if (row.allowed_models) { try { allowed = JSON.parse(row.allowed_models); } catch {} }
     // Invite stats (only meaningful for keys that have an invite_code)
@@ -1903,6 +1935,10 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`   DB:        ${DB_PATH}`);
   console.log(`   API keys:  ${apiKeysConfigured ? `${apiKeysConfigured} key(s) configured (${API_KEYS_PATH})` : "none — all requests allowed (add keys with --add-key)"}`);
   console.log(`   Dash auth: user_session (role=admin)`);
+  console.log(`   TrustProxy: ${TRUST_PROXY ? "ON (X-Forwarded-For honored)" : "OFF (socket addr only)"}`);
+  // Periodic sweep: flip pending/submitted payments past expires_at to expired.
+  const sweepHandle = setInterval(() => sweepExpiredPayments(), 60_000);
+  if (typeof sweepHandle.unref === "function") sweepHandle.unref();
   // Log active token info
   const { token: activeGH, name: activeTokenName } = getActiveGitHubToken();
   if (activeGH) {
