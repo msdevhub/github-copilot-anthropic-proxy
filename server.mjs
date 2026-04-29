@@ -11,10 +11,10 @@ import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_
 import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
-import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext, createWxPendingSession, promoteUserSession } from "./lib/auth.mjs";
+import { checkApiKey, checkAdmin, checkDashboardSession, createDashboardSession, destroyDashboardSession, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext } from "./lib/auth.mjs";
 import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
-import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey } from "./lib/keys-v2.mjs";
+import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request } from "./lib/keys-v2.mjs";
 import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing } from "./lib/pricing.mjs";
 import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
 
@@ -252,7 +252,13 @@ async function handleRequest(req, res) {
       const b = Buffer.from(sig, "hex");
       sigOk = a.length === b.length && timingSafeEqual(a, b);
     } catch { sigOk = false; }
-    if (!sigOk) return redirect("/?err=sig");
+    if (!sigOk) {
+      try {
+        const expected = createHmac("sha256", WX_GATEWAY_SECRET).update(`${token}|${openid}|${unionid}|${ts}`).digest("hex");
+        console.error(`[wx][sig-fail] token=${token} openid=${openid} unionid="${unionid}" ts=${ts} skew=${Date.now()-Number(ts)}ms got=${sig.slice(0,16)}.. expected=${expected.slice(0,16)}.. nickname=${nickname?'Y':'N'} avatar=${avatarUrl?'Y':'N'}`);
+      } catch {}
+      return redirect("/?err=sig");
+    }
 
     // Idempotent upsert into wx_users (only fill empty fields on existing row)
     const now = new Date().toISOString();
@@ -286,55 +292,56 @@ async function handleRequest(req, res) {
       cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
       location = "/";
     } else {
-      // First time (or bound key disabled) → mint pending session, prompt to bind
-      const tok = createWxPendingSession(openid);
+      // ── First-time signup: auto-create a wx_signup key with 30万 free quota ──
+      // Anti-abuse: per-IP throttle (24h max WX_SIGNUP_IP_LIMIT new openids).
+      const clientIp = (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim()
+        || req.socket?.remoteAddress
+        || "unknown";
+      const ipLimit = Number(process.env.WX_SIGNUP_IP_LIMIT || 3);
+      const oneDayAgo = new Date(Date.now() - 24 * 3600_000).toISOString();
+      try {
+        const cnt = db.prepare("SELECT COUNT(*) AS c FROM wx_signup_ip_log WHERE ip = ? AND created_at >= ?").get(clientIp, oneDayAgo).c;
+        if (cnt >= ipLimit) {
+          console.warn(`[wx][ip-throttle] ip=${clientIp} count=${cnt} >= ${ipLimit}`);
+          res.writeHead(429, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "too many signups from this IP, try later" }));
+          return;
+        }
+      } catch (e) { /* fall through */ }
+
+      let newKey;
+      try {
+        newKey = createWxSignupKey({ openid });
+      } catch (e) {
+        console.error("[wx] auto-create key failed:", e.message);
+        return redirect("/?err=db");
+      }
+      try {
+        db.prepare("INSERT INTO wx_signup_ip_log (ip, openid, created_at) VALUES (?, ?, ?)").run(clientIp, openid, new Date().toISOString());
+      } catch {}
+
+      // Invite reward: ?ref=<invite_code>. Both inviter and invitee +50k. Self-invite blocked.
+      const ref = (sp.get("ref") || "").trim();
+      const REWARD = Number(process.env.WX_INVITE_REWARD || 50_000);
+      if (ref && REWARD > 0) {
+        try {
+          const inviter = getKeyByInviteCode(ref);
+          if (inviter && inviter.wx_openid && inviter.wx_openid !== openid && inviter.status !== "disabled") {
+            addFreeQuota(inviter.key_hash, REWARD);
+            addFreeQuota(newKey.key_hash, REWARD);
+            db.prepare("INSERT INTO wx_invites (inviter_key_hash, invitee_key_hash, invitee_openid, reward_tokens, created_at) VALUES (?, ?, ?, ?, ?)").run(inviter.key_hash, newKey.key_hash, openid, REWARD, new Date().toISOString());
+            console.log(`[wx][invite] ${ref} → +${REWARD} both keys`);
+          }
+        } catch (e) { console.error("[wx] invite reward failed:", e.message); }
+      }
+
+      console.log(`[wx][signup] openid=${openid.slice(0,8)}… key=${newKey.prefix}… ip=${clientIp}`);
+      const tok = createUserSession(newKey.key_hash);
       cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
-      location = "/?wx_pending=1";
+      location = "/?wx_new=1";
     }
     res.writeHead(302, { Location: location, "Set-Cookie": cookieValue });
     res.end();
-    return;
-  }
-
-  // ── Bind API key to a pending WeChat session (first-time WeChat login) ───
-  if (req.method === "POST" && req.url === "/user/bind-key") {
-    const ctx = getUserSessionContext(req);
-    if (!ctx || !ctx.wxOpenid) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "no pending wechat session" }));
-      return;
-    }
-    const body = await readJsonBody(req);
-    const raw = (body && body.apiKey) ? String(body.apiKey).trim() : "";
-    if (!raw) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "apiKey is required" }));
-      return;
-    }
-    const row = getKeyByHash(hashKey(raw));
-    if (!row || row.status === "disabled") {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "invalid or disabled key" }));
-      return;
-    }
-    // Reject if this key is already bound to a *different* wx openid
-    if (row.wx_openid && row.wx_openid !== ctx.wxOpenid) {
-      res.writeHead(409, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "this api key is already bound to another wechat account" }));
-      return;
-    }
-    try {
-      // Clear any prior wx_openid on other rows (defensive — keep at most one key per openid)
-      db.prepare("UPDATE api_keys_v2 SET wx_openid = NULL WHERE wx_openid = ? AND key_hash != ?").run(ctx.wxOpenid, row.key_hash);
-      db.prepare("UPDATE api_keys_v2 SET wx_openid = ? WHERE key_hash = ?").run(ctx.wxOpenid, row.key_hash);
-    } catch (e) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "db error: " + e.message }));
-      return;
-    }
-    promoteUserSession(ctx.token, row.key_hash);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, name: row.name, role: row.role }));
     return;
   }
 
@@ -894,6 +901,22 @@ async function handleRequest(req, res) {
     // Record this request for RPM/RPD counters
     recordRequest(apiKeyCheck.name);
   }
+  // Per-key v2 RPM limiter (60 RPM default; covers wx_signup keys with no legacy json entry)
+  if (apiKeyCheck.keyRow) {
+    const v2rl = checkV2RateLimit(apiKeyCheck.keyRow);
+    if (v2rl) {
+      const resetSec = Math.ceil(Math.max(v2rl.resetMs, 0) / 1000);
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "retry-after": String(resetSec),
+        "x-ratelimit-limit-requests": String(v2rl.limit),
+        "x-ratelimit-remaining-requests": "0",
+      });
+      res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: v2rl.message } }));
+      return;
+    }
+    recordV2Request(apiKeyCheck.keyRow);
+  }
 
   const startTime = Date.now();
   const logEntry = { status: 0, model: null, stream: false, usage: null, preview: "", error: null, durationMs: 0, requestSummary: "" };
@@ -1334,21 +1357,6 @@ async function handleUserApi(req, res) {
   } else {
     const ctx = getUserSessionContext(req);
     if (!ctx) return send(401, { error: "unauthorized — POST /user/login first" });
-    // WeChat-pending session (no key bound yet) — only /user/me is allowed; returns a sentinel.
-    if (!ctx.keyHash && ctx.wxOpenid) {
-      const url = new URL(req.url, "http://localhost");
-      if (req.method === "GET" && url.pathname === "/user/me") {
-        const wxRow = db.prepare("SELECT openid, nickname, avatar_url FROM wx_users WHERE openid = ?").get(ctx.wxOpenid) || {};
-        return send(200, {
-          wx_pending: true,
-          wx_openid: ctx.wxOpenid,
-          wx_openid_short: ctx.wxOpenid.slice(0, 6) + "…" + ctx.wxOpenid.slice(-4),
-          nickname: wxRow.nickname || null,
-          avatar_url: wxRow.avatar_url || null,
-        });
-      }
-      return send(403, { error: "wx_pending — bind an API key first via POST /user/bind-key" });
-    }
     viewerKey = getKeyByHash(ctx.keyHash);
     if (!viewerKey || viewerKey.status === "disabled") return send(401, { error: "session key disabled or missing" });
     scopeHash = ctx.keyHash;
@@ -1370,6 +1378,14 @@ async function handleUserApi(req, res) {
     }
     let allowed = null;
     if (row.allowed_models) { try { allowed = JSON.parse(row.allowed_models); } catch {} }
+    // Invite stats (only meaningful for keys that have an invite_code)
+    let inviteStats = null;
+    if (row.invite_code) {
+      try {
+        const r = db.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(reward_tokens),0) AS rew FROM wx_invites WHERE inviter_key_hash = ?").get(row.key_hash);
+        inviteStats = { count: r?.c || 0, reward_total: r?.rew || 0 };
+      } catch { inviteStats = { count: 0, reward_total: 0 }; }
+    }
     return send(200, {
       name: row.name,
       role: row.role,
@@ -1383,6 +1399,9 @@ async function handleUserApi(req, res) {
       allowed_models: allowed,
       created_at: row.created_at,
       last_used_at: row.last_used_at,
+      source: row.source || null,
+      invite_code: row.invite_code || null,
+      invite_stats: inviteStats,
     });
   }
 
@@ -1468,6 +1487,21 @@ async function handleChatCompletions(req, res) {
       return;
     }
     recordRequest(apiKeyCheck.name);
+  }
+  if (apiKeyCheck.keyRow) {
+    const v2rl = checkV2RateLimit(apiKeyCheck.keyRow);
+    if (v2rl) {
+      const resetSec = Math.ceil(Math.max(v2rl.resetMs, 0) / 1000);
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "retry-after": String(resetSec),
+        "x-ratelimit-limit-requests": String(v2rl.limit),
+        "x-ratelimit-remaining-requests": "0",
+      });
+      res.end(JSON.stringify({ error: { type: "rate_limit_error", message: v2rl.message } }));
+      return;
+    }
+    recordV2Request(apiKeyCheck.keyRow);
   }
 
   const startTime = Date.now();
