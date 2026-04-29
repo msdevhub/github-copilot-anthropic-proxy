@@ -17,6 +17,7 @@ import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStr
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request } from "./lib/keys-v2.mjs";
 import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing } from "./lib/pricing.mjs";
 import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
+import { createPayment, claimPayment, syncPaymentStatus, getPaymentByPayOrderId, listPaymentsByKey, applyWebhookEvent, verifyWebhookSig, PACKAGES } from "./lib/payments.mjs";
 
 reloadPricing();
 
@@ -361,6 +362,16 @@ async function handleRequest(req, res) {
   // ── User API (Stage 3): /user/* requires user_session OR admin session ───
   if (req.url.startsWith("/user/") && req.url !== "/user/login" && req.url !== "/user/logout") {
     await handleUserApi(req, res);
+    return;
+  }
+
+  // ── Payment routes (user_session required, except webhook which uses HMAC) ─
+  if (pathname === "/api/wx/payment-webhook" && req.method === "POST") {
+    await handlePaymentWebhook(req, res);
+    return;
+  }
+  if (req.url.startsWith("/api/pay/")) {
+    await handlePaymentApi(req, res);
     return;
   }
 
@@ -1393,6 +1404,7 @@ async function handleUserApi(req, res) {
       free_quota: row.free_quota,
       free_used: row.free_used,
       free_reset_at: row.free_reset_at,
+      paid_quota: Number(row.paid_quota || 0),
       balance_tokens: row.balance_tokens,
       unlimited: !!row.unlimited,
       status: row.status,
@@ -1459,6 +1471,128 @@ async function handleUserApi(req, res) {
   }
 
   return send(404, { error: "not found" });
+}
+
+// ─── Payment API: /api/pay/* (user_session required) ────────────────────────
+async function handlePaymentApi(req, res) {
+  const send = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+  const ctx = getUserSessionContext(req);
+  if (!ctx) return send(401, { error: "unauthorized" });
+  const keyRow = getKeyByHash(ctx.keyHash);
+  if (!keyRow || keyRow.status === "disabled") return send(401, { error: "session_invalid" });
+
+  const url = new URL(req.url, "http://localhost");
+  const pathname = url.pathname;
+
+  // POST /api/pay/create  { package: "990" | "2900" }
+  if (req.method === "POST" && pathname === "/api/pay/create") {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    let body = {};
+    try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}"); } catch { return send(400, { error: "bad_json" }); }
+    const pkgId = String(body.package || "");
+    if (!PACKAGES[pkgId]) return send(400, { error: "invalid_package", allowed: Object.keys(PACKAGES) });
+    const r = await createPayment({ keyRow, packageId: pkgId });
+    if (!r.ok) return send(r.status || 500, { error: r.error, detail: r.detail });
+    return send(200, r.payment);
+  }
+
+  // POST /api/pay/claim  { payOrderId }
+  if (req.method === "POST" && pathname === "/api/pay/claim") {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    let body = {};
+    try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}"); } catch { return send(400, { error: "bad_json" }); }
+    const payment = getPaymentByPayOrderId(body.payOrderId);
+    if (!payment) return send(404, { error: "not_found" });
+    if (payment.key_id !== keyRow.key_hash) return send(403, { error: "forbidden" });
+    const r = await claimPayment({ payment });
+    if (!r.ok) return send(r.status || 500, { error: r.error, current: r.current, detail: r.detail });
+    return send(200, { status: r.status });
+  }
+
+  // GET /api/pay/status/:payOrderId
+  if (req.method === "GET" && pathname.startsWith("/api/pay/status/")) {
+    const payOrderId = decodeURIComponent(pathname.slice("/api/pay/status/".length));
+    const payment = getPaymentByPayOrderId(payOrderId);
+    if (!payment) return send(404, { error: "not_found" });
+    if (payment.key_id !== keyRow.key_hash) return send(403, { error: "forbidden" });
+    const synced = await syncPaymentStatus({ payment });
+    const p = synced || payment;
+    return send(200, {
+      payOrderId: p.payOrderId,
+      orderId: p.orderId,
+      status: p.status,
+      amount_fen: p.amount_fen,
+      package: p.package,
+      tokens_to_grant: p.tokens_to_grant,
+      remark: p.remark,
+      qrcodeUrl: p.qrcodeUrl,
+      created_at: p.created_at,
+      submitted_at: p.submitted_at,
+      paid_at: p.paid_at,
+      expires_at: p.expires_at,
+      reject_reason: p.reject_reason,
+    });
+  }
+
+  // GET /api/pay/history?limit=
+  if (req.method === "GET" && pathname === "/api/pay/history") {
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "10", 10), 50);
+    const rows = listPaymentsByKey(keyRow.key_hash, limit);
+    return send(200, { payments: rows });
+  }
+
+  return send(404, { error: "not found" });
+}
+
+// ─── Webhook handler (HMAC-only public; called by wx-gateway) ───────────────
+async function handlePaymentWebhook(req, res) {
+  const send = (status, obj) => {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(obj || {}));
+  };
+
+  const secret = process.env.WX_GATEWAY_SECRET || "";
+  if (!secret) return send(503, { error: "wx_disabled" });
+
+  const sig = (req.headers["x-wx-webhook-sig"] || "").toString();
+  const ts  = (req.headers["x-wx-webhook-ts"]  || "").toString();
+  if (!sig || !ts) return send(403, { error: "missing_signature" });
+
+  const chunks = []; for await (const c of req) chunks.push(c);
+  let body;
+  try { body = JSON.parse(Buffer.concat(chunks).toString() || "{}"); } catch { return send(400, { error: "bad_json" }); }
+  const { event, payOrderId, status, externalRef, paidAt, rejectReason } = body || {};
+
+  const sigOk = verifyWebhookSig({ secret, event, payOrderId, status, ts, sig });
+  if (!sigOk) {
+    console.warn(`[pay][webhook] bad signature payOrderId=${payOrderId} event=${event}`);
+    return send(403, { error: "invalid_signature" });
+  }
+
+  try {
+    const r = applyWebhookEvent({
+      event,
+      payOrderId,
+      status,
+      externalRef: externalRef || null,
+      rejectReason: rejectReason || null,
+      paidAtIso: paidAt || null,
+    });
+    if (!r.ok) {
+      console.warn(`[pay][webhook] ${r.error} payOrderId=${payOrderId}`);
+      return send(200, { ok: false, error: r.error });
+    }
+    if (r.idempotent) {
+      console.log(`[pay][webhook] idempotent payOrderId=${payOrderId} status=${status}`);
+    } else {
+      console.log(`[pay][webhook] applied payOrderId=${payOrderId} event=${event} status=${status}`);
+    }
+    return send(200, { ok: true });
+  } catch (e) {
+    console.error(`[pay][webhook] handler error:`, e);
+    return send(500, { error: "internal" });
+  }
 }
 
 // ─── /v1/chat/completions (OpenAI-compatible) ───────────────────────────────
