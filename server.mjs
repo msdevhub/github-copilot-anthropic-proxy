@@ -13,12 +13,14 @@ import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getR
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
 import { checkApiKey, checkAdmin, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext } from "./lib/auth.mjs";
 import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
-import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream } from "./lib/openai-protocol.mjs";
+import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream, getModelRegistry } from "./lib/openai-protocol.mjs";
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request, maybeSettleInvite } from "./lib/keys-v2.mjs";
-import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing } from "./lib/pricing.mjs";
+import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing, seedPricingFromConfig } from "./lib/pricing.mjs";
+import * as modelsReg from "./lib/models-registry.mjs";
 import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
 import { createPayment, claimPayment, syncPaymentStatus, getPaymentByPayOrderId, listPaymentsByKey, applyWebhookEvent, verifyWebhookSig, sweepExpiredPayments, PACKAGES } from "./lib/payments.mjs";
 
+seedPricingFromConfig();
 reloadPricing();
 
 // ─── WeChat gateway config (env-driven; if any missing, WeChat login is disabled) ─
@@ -889,7 +891,7 @@ async function handleRequest(req, res) {
   // GET /v1/models — return supported models list (needed by Claude Code)
   if (req.method === "GET" && req.url.startsWith("/v1/models")) {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ data: MODEL_REGISTRY }));
+    res.end(JSON.stringify({ data: getModelRegistry({ enabledOnly: true }) }));
     return;
   }
 
@@ -1366,6 +1368,65 @@ async function handleAdmin(req, res, adminCtx = { source: "unknown", adminKeyHas
         reloadPricing();
         return send(200, { ok: true, model });
       } catch (e) { return send(400, { error: e.message }); }
+    }
+  }
+
+  // ── Models registry (DB-backed) ─────────────────────────────────────────
+  // GET /admin/models — list everything (incl. disabled), with pricing
+  if (req.method === "GET" && path === "/admin/models") {
+    const all = modelsReg.listModels({ enabledOnly: false });
+    const pricing = modelsReg.getAllPricing();
+    const data = all.map(m => ({
+      ...m,
+      pricing: pricing[m.id] || null,
+    }));
+    return send(200, { models: data, last_synced_at: modelsReg.lastSyncedAt(), default_pricing: modelsReg.getDefaultRates() });
+  }
+  // POST /admin/models/sync — pull from upstream Copilot /models
+  if (req.method === "POST" && path === "/admin/models/sync") {
+    try {
+      const result = await modelsReg.syncFromUpstream();
+      audit("models.sync", null, result);
+      return send(200, result);
+    } catch (e) {
+      const status = e.status || 500;
+      return send(status, { error: e.message });
+    }
+  }
+  // PATCH /admin/models/:id — { enabled?, input_multiplier?, output_multiplier?, display_name? }
+  // DELETE /admin/models/:id — only if disabled
+  const mm = path.match(/^\/admin\/models\/([^/]+)$/);
+  if (mm) {
+    const id = decodeURIComponent(mm[1]);
+    if (req.method === "PATCH") {
+      const body = await readJsonBody(req) || {};
+      const changes = {};
+      try {
+        if (typeof body.enabled === "boolean") {
+          if (!modelsReg.setEnabled(id, body.enabled)) return send(404, { error: "model not found" });
+          changes.enabled = body.enabled;
+        }
+        if (typeof body.display_name === "string" && body.display_name.trim()) {
+          if (!modelsReg.setDisplayName(id, body.display_name.trim())) return send(404, { error: "model not found" });
+          changes.display_name = body.display_name.trim();
+        }
+        if (body.input_multiplier !== undefined || body.output_multiplier !== undefined) {
+          const cur = modelsReg.getRatesForModel(id);
+          const inMult = body.input_multiplier !== undefined ? Number(body.input_multiplier) : cur.input_multiplier;
+          const outMult = body.output_multiplier !== undefined ? Number(body.output_multiplier) : cur.output_multiplier;
+          changes.pricing = modelsReg.upsertPricing(id, inMult, outMult);
+        }
+        if (Object.keys(changes).length === 0) return send(400, { error: "no recognized fields" });
+        audit("models.update", id, changes);
+        return send(200, { ok: true, id, changes });
+      } catch (e) { return send(400, { error: e.message }); }
+    }
+    if (req.method === "DELETE") {
+      const r = modelsReg.deleteModel(id);
+      if (!r.ok && r.reason === "not_found") return send(404, { error: "model not found" });
+      if (!r.ok && r.reason === "still_enabled") return send(409, { error: "disable model before deleting" });
+      audit("models.delete", id, null);
+      return send(200, { ok: true, id });
     }
   }
 

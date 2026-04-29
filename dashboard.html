@@ -39,6 +39,7 @@
   <div class="top-tab" data-tab="keys" onclick="switchMainTab('keys')">Keys</div>
   <div class="top-tab" data-tab="usage" onclick="switchMainTab('usage')">Usage</div>
   <div class="top-tab" data-tab="pricing" onclick="switchMainTab('pricing')">Pricing</div>
+  <div class="top-tab" data-tab="models" onclick="switchMainTab('models')">Models</div>
   <div class="top-tab" data-tab="audit" onclick="switchMainTab('audit')">Audit</div>
   <div class="top-tab" data-tab="charts" onclick="switchMainTab('charts')">Charts</div>
 </div>
@@ -355,6 +356,37 @@ claude</pre>
         <table class="tbl">
           <thead><tr><th>Model</th><th style="width:140px">Input mult.</th><th style="width:140px">Output mult.</th><th style="width:1%;white-space:nowrap">Actions</th></tr></thead>
           <tbody id="pricing-body"><tr><td colspan="4" style="text-align:center;color:var(--text-4)">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TAB: MODELS ==================== -->
+  <div class="tab-content" id="tab-models">
+    <div class="settings-card">
+      <div class="settings-card-title">Models Registry (synced from Copilot upstream /models)</div>
+      <div style="color:var(--text-4);font-size:11px;margin-bottom:12px">
+        模型列表 + pricing 都存在数据库里。点 "🔄 刷新模型列表" 从 Copilot 上游 <code style="color:var(--accent-bright)">/models</code> 拉取最新清单，新增模型默认 enabled、走默认 pricing。改完单元格立即生效。
+      </div>
+      <div class="bar"><div class="bar-row-1">
+        <button class="btn on" id="models-sync-btn" onclick="syncModelsFromUpstream()">🔄 刷新模型列表</button>
+        <button class="btn" onclick="loadModels()">Refresh</button>
+        <span style="flex:1"></span>
+        <span style="color:var(--text-4);font-size:11px" id="models-last-synced"></span>
+      </div></div>
+      <div class="tbl-container">
+        <table class="tbl">
+          <thead><tr>
+            <th>Model ID</th>
+            <th>Vendor</th>
+            <th>Display Name</th>
+            <th style="width:80px">Preview</th>
+            <th style="width:80px">Enabled</th>
+            <th style="width:120px">Input mult.</th>
+            <th style="width:120px">Output mult.</th>
+            <th style="width:1%;white-space:nowrap">Actions</th>
+          </tr></thead>
+          <tbody id="models-body"><tr><td colspan="8" style="text-align:center;color:var(--text-4)">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>

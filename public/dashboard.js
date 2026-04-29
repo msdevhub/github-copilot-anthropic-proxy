@@ -42,6 +42,7 @@ function switchMainTab(tab) {
   if (tab === 'keys') { v2LoadKeys(); }
   if (tab === 'usage') { loadOverview(); }
   if (tab === 'pricing') { loadPricing(); }
+  if (tab === 'models') { loadModels(); }
   if (tab === 'audit') { loadAudit(); }
 }
 
@@ -1672,6 +1673,109 @@ async function reloadPricingFile() {
   const r = await fetch('/admin/pricing/reload', { method: 'POST', credentials: 'include' });
   if (!r.ok) { alert('reload failed: HTTP ' + r.status); return; }
   loadPricing();
+}
+
+// ─── Models tab ─────────────────────────────────────────────────────────────
+function _toast(msg, kind) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = `position:fixed;top:20px;right:20px;padding:10px 14px;border-radius:6px;font-size:13px;z-index:9999;background:${kind==='err'?'#b22':'#1c5'};color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.3)`;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+function _setHTML(el, html) { el.innerHTML = html; }
+
+async function loadModels() {
+  const tbody = document.getElementById('models-body');
+  if (!tbody) return;
+  try {
+    const r = await fetch('/admin/models', { credentials: 'include' });
+    if (!r.ok) { _setHTML(tbody, `<tr><td colspan="8" style="color:var(--c-red);text-align:center">HTTP ${r.status}</td></tr>`); return; }
+    const j = await r.json();
+    const lastEl = document.getElementById('models-last-synced');
+    if (lastEl) {
+      lastEl.textContent = j.last_synced_at ? `Last synced: ${new Date(j.last_synced_at).toLocaleString()}` : 'Never synced';
+    }
+    const rows = j.models || [];
+    if (!rows.length) {
+      _setHTML(tbody, '<tr><td colspan="8" style="text-align:center;color:var(--text-4)">no models — click 🔄 to sync from upstream</td></tr>');
+      return;
+    }
+    const def = j.default_pricing || { input_multiplier: 1, output_multiplier: 5 };
+    const html = rows.map(m => {
+      const safeId = m.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const p = m.pricing || def;
+      const previewBadge = m.preview ? '<span style="background:#d80;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px">PREVIEW</span>' : '';
+      const enabledChecked = m.enabled ? 'checked' : '';
+      return `<tr>
+        <td><code style="font-size:11px">${escapeHTML(m.id)}</code></td>
+        <td>${escapeHTML(m.vendor || m.provider || '-')}</td>
+        <td><input type="text" id="md-name-${safeId}" value="${escapeAttr(m.display_name || '')}" class="token-input" style="width:100%;min-width:180px"></td>
+        <td>${previewBadge}</td>
+        <td><label style="cursor:pointer"><input type="checkbox" id="md-en-${safeId}" ${enabledChecked} onchange="setModelEnabled('${escapeAttr(m.id)}', this.checked)"></label></td>
+        <td><input type="number" id="md-in-${safeId}" value="${p.input_multiplier}" step="0.01" min="0" class="token-input" style="width:100px"></td>
+        <td><input type="number" id="md-out-${safeId}" value="${p.output_multiplier}" step="0.01" min="0" class="token-input" style="width:100px"></td>
+        <td style="white-space:nowrap">
+          <button class="btn on" onclick="saveModelRow('${escapeAttr(m.id)}','${safeId}')">Save</button>
+          ${m.enabled ? '' : `<button class="btn" onclick="deleteModelRow('${escapeAttr(m.id)}')">Delete</button>`}
+        </td>
+      </tr>`;
+    }).join('');
+    _setHTML(tbody, html);
+  } catch (e) {
+    _setHTML(tbody, `<tr><td colspan="8" style="color:var(--c-red);text-align:center">${escapeHTML(e.message)}</td></tr>`);
+  }
+}
+
+async function syncModelsFromUpstream() {
+  const btn = document.getElementById('models-sync-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 同步中…'; }
+  try {
+    const r = await fetch('/admin/models/sync', { method: 'POST', credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      _toast(`同步失败: ${j.error || 'HTTP ' + r.status}`, 'err');
+    } else {
+      _toast(`✓ 新增 ${j.added} / 更新 ${j.updated} (共 ${j.total})`, 'ok');
+      await loadModels();
+    }
+  } catch (e) {
+    _toast(`同步失败: ${e.message}`, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 刷新模型列表'; }
+  }
+}
+
+async function setModelEnabled(modelId, enabled) {
+  const r = await fetch(`/admin/models/${encodeURIComponent(modelId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+    body: JSON.stringify({ enabled }),
+  });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); _toast(`update failed: ${j.error || r.status}`, 'err'); loadModels(); return; }
+  _toast(enabled ? `✓ enabled ${modelId}` : `✓ disabled ${modelId}`, 'ok');
+  loadModels();
+}
+
+async function saveModelRow(modelId, safeId) {
+  const display_name = document.getElementById(`md-name-${safeId}`).value.trim();
+  const input_multiplier = Number(document.getElementById(`md-in-${safeId}`).value);
+  const output_multiplier = Number(document.getElementById(`md-out-${safeId}`).value);
+  const r = await fetch(`/admin/models/${encodeURIComponent(modelId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+    body: JSON.stringify({ display_name, input_multiplier, output_multiplier }),
+  });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); _toast(`save failed: ${j.error || r.status}`, 'err'); return; }
+  _toast(`✓ saved ${modelId}`, 'ok');
+  loadModels();
+}
+
+async function deleteModelRow(modelId) {
+  if (!confirm(`Delete "${modelId}"? Only disabled models can be deleted.`)) return;
+  const r = await fetch(`/admin/models/${encodeURIComponent(modelId)}`, { method: 'DELETE', credentials: 'include' });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); _toast(`delete failed: ${j.error || r.status}`, 'err'); return; }
+  _toast(`✓ deleted ${modelId}`, 'ok');
+  loadModels();
 }
 
 // ─── Audit tab ──────────────────────────────────────────────────────────────
