@@ -38,61 +38,12 @@
   <div class="top-tab" data-tab="settings" onclick="switchMainTab('settings')">Settings</div>
   <div class="top-tab" data-tab="keys" onclick="switchMainTab('keys')">Keys</div>
   <div class="top-tab" data-tab="usage" onclick="switchMainTab('usage')">Usage</div>
-  <div class="top-tab" data-tab="pricing" onclick="switchMainTab('pricing')">Pricing</div>
   <div class="top-tab" data-tab="models" onclick="switchMainTab('models')">Models</div>
   <div class="top-tab" data-tab="audit" onclick="switchMainTab('audit')">Audit</div>
   <div class="top-tab" data-tab="charts" onclick="switchMainTab('charts')">Charts</div>
 </div>
 
 <div class="page">
-
-  <!-- ==================== Quick-start integration ==================== -->
-  <div class="qs-card" id="qs-card">
-    <div class="qs-head">
-      <span class="qs-title">⚡ Quick Start · 接入指引</span>
-      <div class="qs-tabs">
-        <div class="qs-tab active" data-qs="cc" onclick="qsSwitch('cc')">Claude Code</div>
-        <div class="qs-tab" data-qs="oc" onclick="qsSwitch('oc')">OpenClaw</div>
-      </div>
-    </div>
-    <div class="qs-panel active" id="qs-cc">
-      <pre class="qs-pre" id="qs-cc-pre">export ANTHROPIC_BASE_URL=https://api.eagle.openclaws.co.uk
-export ANTHROPIC_AUTH_TOKEN=sk-你的key
-claude</pre>
-      <button class="qs-copy" onclick="qsCopy('qs-cc-pre', this)">Copy</button>
-    </div>
-    <div class="qs-panel" id="qs-oc">
-      <pre class="qs-pre" id="qs-oc-pre">// ~/.openclaw/agents/&lt;agent&gt;/agent/models.json
-{
-  "providers": {
-    "copilot-proxy": {
-      "baseUrl": "https://api.eagle.openclaws.co.uk/v1/",
-      "apiKey": "sk-你的key",
-      "api": "openai-completions",
-      "models": [
-        { "id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6", "api": "openai-completions" }
-      ]
-    }
-  }
-}</pre>
-      <button class="qs-copy" onclick="qsCopy('qs-oc-pre', this)">Copy</button>
-      <div class="qs-hint">把 agent primary model 设成 <code>copilot-proxy/claude-sonnet-4.6</code></div>
-    </div>
-  </div>
-  <script>
-    function qsSwitch(k){
-      document.querySelectorAll('.qs-tab').forEach(t=>t.classList.toggle('active', t.dataset.qs===k));
-      document.querySelectorAll('.qs-panel').forEach(p=>p.classList.toggle('active', p.id==='qs-'+k));
-    }
-    function qsCopy(id, btn){
-      const txt = document.getElementById(id).innerText;
-      navigator.clipboard.writeText(txt).then(()=>{
-        const o = btn.textContent; btn.textContent='Copied'; btn.classList.add('ok');
-        setTimeout(()=>{ btn.textContent=o; btn.classList.remove('ok'); }, 1400);
-      });
-    }
-  </script>
-
 
   <!-- ==================== TAB: LOGS ==================== -->
   <div class="tab-content active" id="tab-logs">
@@ -332,31 +283,6 @@ claude</pre>
       <div class="chart-title">Daily Cost</div>
       <div class="tbl-container" style="max-height:300px;overflow:auto">
         <table class="tbl"><thead><tr><th>Day</th><th>Requests</th><th>Cost</th><th style="width:60%">Trend</th></tr></thead><tbody id="ov-daily"><tr><td colspan="4" style="text-align:center;color:var(--text-4)">—</td></tr></tbody></table>
-      </div>
-    </div>
-  </div>
-
-  <!-- ==================== TAB: PRICING ==================== -->
-  <div class="tab-content" id="tab-pricing">
-    <div class="settings-card">
-      <div class="settings-card-title">Model Pricing (cost = input × in-mult + output × out-mult)</div>
-      <div style="color:var(--text-4);font-size:11px;margin-bottom:12px">
-        Edits write back to <code style="color:var(--accent-bright)">pricing.json</code> and take effect immediately. Row <code style="color:var(--accent-bright)">_default</code> is the fallback for unknown models and cannot be deleted.
-      </div>
-      <div class="bar"><div class="bar-row-1">
-        <button class="btn" onclick="loadPricing()">Refresh</button>
-        <button class="btn" onclick="reloadPricingFile()">Reload from file</button>
-        <span style="flex:1"></span>
-        <input type="text" id="pr-add-model" placeholder="model id (e.g. claude-haiku-4-5)" style="min-width:220px" class="token-input">
-        <input type="number" id="pr-add-in" placeholder="in-mult" value="1" min="0" step="0.1" style="width:90px" class="token-input">
-        <input type="number" id="pr-add-out" placeholder="out-mult" value="5" min="0" step="0.1" style="width:90px" class="token-input">
-        <button class="btn on" onclick="addPricingRow()">+ Add Model</button>
-      </div></div>
-      <div class="tbl-container">
-        <table class="tbl">
-          <thead><tr><th>Model</th><th style="width:140px">Input mult.</th><th style="width:140px">Output mult.</th><th style="width:1%;white-space:nowrap">Actions</th></tr></thead>
-          <tbody id="pricing-body"><tr><td colspan="4" style="text-align:center;color:var(--text-4)">Loading…</td></tr></tbody>
-        </table>
       </div>
     </div>
   </div>

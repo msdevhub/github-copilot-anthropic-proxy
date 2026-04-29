@@ -41,7 +41,6 @@ function switchMainTab(tab) {
   if (tab === 'settings') { loadTokenData(); loadApiKeys(); }
   if (tab === 'keys') { v2LoadKeys(); }
   if (tab === 'usage') { loadOverview(); }
-  if (tab === 'pricing') { loadPricing(); }
   if (tab === 'models') { loadModels(); }
   if (tab === 'audit') { loadAudit(); }
 }
@@ -1614,65 +1613,6 @@ async function loadOverview() {
     }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-4)">no data</td></tr>';
     document.getElementById('ov-daily').innerHTML = dailyRows;
   } catch (e) { alert('overview failed: ' + e.message); }
-}
-
-// ─── Pricing tab ────────────────────────────────────────────────────────────
-async function loadPricing() {
-  const tbody = document.getElementById('pricing-body');
-  if (!tbody) return;
-  try {
-    const r = await fetch('/admin/pricing', { credentials: 'include' });
-    if (!r.ok) { tbody.innerHTML = `<tr><td colspan="4" style="color:var(--c-red);text-align:center">HTTP ${r.status}</td></tr>`; return; }
-    const { pricing } = await r.json();
-    const rows = Object.keys(pricing).sort((a, b) => a === '_default' ? -1 : b === '_default' ? 1 : a.localeCompare(b));
-    const html = rows.map(model => {
-      const p = pricing[model];
-      const isDefault = model === '_default';
-      const safeId = model.replace(/[^a-zA-Z0-9_-]/g, '_');
-      return `<tr>
-        <td>${escapeHTML(model)}${isDefault ? ' <span style="color:var(--text-4);font-size:10px">(fallback)</span>' : ''}</td>
-        <td><input type="number" id="pr-in-${safeId}" value="${p.input_multiplier}" step="0.1" min="0" class="token-input" style="width:120px"></td>
-        <td><input type="number" id="pr-out-${safeId}" value="${p.output_multiplier}" step="0.1" min="0" class="token-input" style="width:120px"></td>
-        <td style="white-space:nowrap">
-          <button class="btn on" onclick="savePricingRow('${escapeAttr(model)}','${safeId}')">Save</button>
-          ${isDefault ? '' : `<button class="btn" onclick="deletePricingRow('${escapeAttr(model)}')">Delete</button>`}
-        </td>
-      </tr>`;
-    }).join('');
-    tbody.innerHTML = html || '<tr><td colspan="4" style="text-align:center;color:var(--text-4)">no pricing entries</td></tr>';
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="4" style="color:var(--c-red);text-align:center">${escapeHTML(e.message)}</td></tr>`; }
-}
-
-async function savePricingRow(model, safeId) {
-  const input_multiplier = Number(document.getElementById(`pr-in-${safeId}`).value);
-  const output_multiplier = Number(document.getElementById(`pr-out-${safeId}`).value);
-  const r = await fetch(`/admin/pricing/${encodeURIComponent(model)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ input_multiplier, output_multiplier }) });
-  if (!r.ok) { const j = await r.json().catch(() => ({})); alert('save failed: ' + (j.error || r.status)); return; }
-  loadPricing();
-}
-
-async function deletePricingRow(model) {
-  if (!confirm(`Delete pricing for "${model}"? Unknown models fall back to _default.`)) return;
-  const r = await fetch(`/admin/pricing/${encodeURIComponent(model)}`, { method: 'DELETE', credentials: 'include' });
-  if (!r.ok) { alert('delete failed: HTTP ' + r.status); return; }
-  loadPricing();
-}
-
-async function addPricingRow() {
-  const model = document.getElementById('pr-add-model').value.trim();
-  if (!model) { alert('model id required'); return; }
-  const input_multiplier = Number(document.getElementById('pr-add-in').value);
-  const output_multiplier = Number(document.getElementById('pr-add-out').value);
-  const r = await fetch('/admin/pricing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ model, input_multiplier, output_multiplier }) });
-  if (!r.ok) { const j = await r.json().catch(() => ({})); alert('add failed: ' + (j.error || r.status)); return; }
-  document.getElementById('pr-add-model').value = '';
-  loadPricing();
-}
-
-async function reloadPricingFile() {
-  const r = await fetch('/admin/pricing/reload', { method: 'POST', credentials: 'include' });
-  if (!r.ok) { alert('reload failed: HTTP ' + r.status); return; }
-  loadPricing();
 }
 
 // ─── Models tab ─────────────────────────────────────────────────────────────
