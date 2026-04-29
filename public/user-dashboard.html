@@ -68,6 +68,12 @@
   .share-pct { color:var(--text-4); }
   .share-track { height:6px; background:rgba(255,255,255,0.04); border-radius:3px; overflow:hidden; }
   .share-fill { height:100%; }
+  .qs-tab { padding:8px 14px; cursor:pointer; font-size:12px; color:var(--text-3); border-bottom:2px solid transparent; margin-bottom:-1px; user-select:none; }
+  .qs-tab.active { color:var(--text-1); border-bottom-color:#7170ff; font-weight:600; }
+  .qs-pre { background:#0d0f12; border:1px solid var(--border); border-radius:6px; padding:12px; font-size:12px; font-family:ui-monospace,monospace; color:var(--text-1); margin:0; white-space:pre-wrap; word-break:break-all; }
+  .qs-copy { position:absolute; top:8px; right:8px; padding:4px 10px; background:var(--bg-3,#26282d); border:1px solid var(--border); color:var(--text-1); border-radius:5px; cursor:pointer; font-size:11px; }
+  .qs-copy.ok { background:#3a8a3a; color:#fff; }
+  .btn-admin { background:#c97a2a; border:none; color:#fff; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; margin-right:6px; }
 </style>
 </head>
 <body>
@@ -109,58 +115,64 @@
       </div>
       <div class="hdr-right">
         <span class="hdr-user" id="user-name"></span>
+        <button id="btn-admin" class="btn-admin" style="display:none" onclick="goAdmin()">🔧 管理后台</button>
         <button class="btn" onclick="userRefresh()">Refresh</button>
         <button class="btn" onclick="userLogout()">Logout</button>
       </div>
     </header>
 
     <div class="page">
-      <!-- Quick-start integration -->
-      <div class="qs-card">
-        <div class="qs-head">
-          <span class="qs-title">⚡ Quick Start · 接入指引</span>
-          <div class="qs-tabs">
-            <div class="qs-tab active" data-qs="cc" onclick="qsSwitch('cc')">Claude Code</div>
-            <div class="qs-tab" data-qs="oc" onclick="qsSwitch('oc')">OpenClaw</div>
+      <!-- 邀请好友 (顶部) -->
+      <div class="user-card" id="invite-card" style="display:none">
+        <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">邀请好友 · 双方各得 5 万额度</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="font-size:13px;color:var(--text-2)">已邀请 <strong id="invite-count" style="color:var(--text-1)">0</strong> 人 · 累计获得 <strong id="invite-reward" style="color:var(--text-1)">0</strong> tokens</div>
+          <div style="font-size:12px;color:var(--text-4)">邀请码：<span id="invite-code" style="color:var(--text-2);font-family:ui-monospace,monospace">—</span></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:stretch">
+          <code id="invite-link" style="flex:1;padding:8px 10px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;font-size:12px;overflow:auto;white-space:nowrap">—</code>
+          <button onclick="copyInviteLink(this)" style="padding:8px 14px;background:var(--bg-3);border:1px solid var(--border);color:var(--text-1);border-radius:6px;cursor:pointer;font-size:12px">复制邀请链接</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-4);margin-top:8px">💡 关注公众号「造悟者」回复"更多额度"获取额外奖励</div>
+      </div>
+
+      <!-- 接入资源 -->
+      <div class="user-card" id="resources-card">
+        <div id="res-head" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none" onclick="resToggle()">
+          <span style="font-size:13px;font-weight:600;color:var(--text-1)">📚 接入资源</span>
+          <span id="res-arrow" style="color:var(--text-3);font-size:12px">▼</span>
+        </div>
+        <div id="res-body" style="margin-top:12px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+            <span style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em">当前 API Key</span>
+            <code id="res-key-display" style="flex:1;min-width:240px;padding:6px 10px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:ui-monospace,monospace;color:var(--text-2)">—</code>
+            <button id="res-key-toggle" onclick="resToggleKey()" style="padding:6px 12px;background:var(--bg-3);border:1px solid var(--border);color:var(--text-1);border-radius:6px;cursor:pointer;font-size:12px">显示完整</button>
+            <button onclick="resCopyKey(this)" style="padding:6px 12px;background:var(--bg-3);border:1px solid var(--border);color:var(--text-1);border-radius:6px;cursor:pointer;font-size:12px">复制</button>
+          </div>
+          <div class="qs-tabs" style="display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:10px">
+            <div class="qs-tab active" data-rk="cc" onclick="resSwitch('cc')">Claude Code</div>
+            <div class="qs-tab" data-rk="oc" onclick="resSwitch('oc')">OpenCode</div>
+            <div class="qs-tab" data-rk="cx" onclick="resSwitch('cx')">Codex</div>
+            <div class="qs-tab" data-rk="ow" onclick="resSwitch('ow')">OpenClaw</div>
+          </div>
+          <div class="res-panel active" id="res-cc" style="position:relative">
+            <button class="qs-copy" onclick="resCopyCmd('res-cc-pre', this)">复制</button>
+            <pre class="qs-pre" id="res-cc-pre"></pre>
+          </div>
+          <div class="res-panel" id="res-oc" style="display:none;position:relative">
+            <button class="qs-copy" onclick="resCopyCmd('res-oc-pre', this)">复制</button>
+            <pre class="qs-pre" id="res-oc-pre"></pre>
+          </div>
+          <div class="res-panel" id="res-cx" style="display:none;position:relative">
+            <button class="qs-copy" onclick="resCopyCmd('res-cx-pre', this)">复制</button>
+            <pre class="qs-pre" id="res-cx-pre"></pre>
+          </div>
+          <div class="res-panel" id="res-ow" style="display:none;position:relative">
+            <button class="qs-copy" onclick="resCopyCmd('res-ow-pre', this)">复制</button>
+            <pre class="qs-pre" id="res-ow-pre"></pre>
           </div>
         </div>
-        <div class="qs-panel active" id="qs-cc">
-          <pre class="qs-pre" id="qs-cc-pre">export ANTHROPIC_BASE_URL=https://api.eagle.openclaws.co.uk
-export ANTHROPIC_AUTH_TOKEN=sk-你的key
-claude</pre>
-          <button class="qs-copy" onclick="qsCopy('qs-cc-pre', this)">Copy</button>
-        </div>
-        <div class="qs-panel" id="qs-oc">
-          <pre class="qs-pre" id="qs-oc-pre">// ~/.openclaw/agents/&lt;agent&gt;/agent/models.json
-{
-  "providers": {
-    "copilot-proxy": {
-      "baseUrl": "https://api.eagle.openclaws.co.uk/v1/",
-      "apiKey": "sk-你的key",
-      "api": "openai-completions",
-      "models": [
-        { "id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6", "api": "openai-completions" }
-      ]
-    }
-  }
-}</pre>
-          <button class="qs-copy" onclick="qsCopy('qs-oc-pre', this)">Copy</button>
-          <div class="qs-hint">把 agent primary model 设成 <code>copilot-proxy/claude-sonnet-4.6</code></div>
-        </div>
       </div>
-      <script>
-        function qsSwitch(k){
-          document.querySelectorAll('.qs-tab').forEach(t=>t.classList.toggle('active', t.dataset.qs===k));
-          document.querySelectorAll('.qs-panel').forEach(p=>p.classList.toggle('active', p.id==='qs-'+k));
-        }
-        function qsCopy(id, btn){
-          const txt = document.getElementById(id).innerText;
-          navigator.clipboard.writeText(txt).then(()=>{
-            const o = btn.textContent; btn.textContent='Copied'; btn.classList.add('ok');
-            setTimeout(()=>{ btn.textContent=o; btn.classList.remove('ok'); }, 1400);
-          });
-        }
-      </script>
 
       <div id="welcome-banner" class="user-card" style="display:none;border-color:#3a8a3a;background:linear-gradient(90deg,rgba(58,138,58,.08),transparent)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
@@ -282,19 +294,6 @@ claude</pre>
             <tbody id="logs-body"></tbody>
           </table>
         </div>
-      </div>
-
-      <div class="user-card" id="invite-card" style="display:none">
-        <div style="font-size:11px;color:var(--text-4);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">邀请好友 · 双方各得 5 万额度</div>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-          <div style="font-size:13px;color:var(--text-2)">已邀请 <strong id="invite-count" style="color:var(--text-1)">0</strong> 人 · 累计获得 <strong id="invite-reward" style="color:var(--text-1)">0</strong> tokens</div>
-          <div style="font-size:12px;color:var(--text-4)">邀请码：<span id="invite-code" style="color:var(--text-2);font-family:ui-monospace,monospace">—</span></div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:stretch">
-          <code id="invite-link" style="flex:1;padding:8px 10px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;font-size:12px;overflow:auto;white-space:nowrap">—</code>
-          <button onclick="copyInviteLink(this)" style="padding:8px 14px;background:var(--bg-3);border:1px solid var(--border);color:var(--text-1);border-radius:6px;cursor:pointer;font-size:12px">复制邀请链接</button>
-        </div>
-        <div style="font-size:11px;color:var(--text-4);margin-top:8px">💡 关注公众号「造悟者」回复"更多额度"获取额外奖励</div>
       </div>
     </div>
   </div>

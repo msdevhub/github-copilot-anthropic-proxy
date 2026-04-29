@@ -201,7 +201,7 @@ async function handleRequest(req, res) {
       res.end(JSON.stringify({ error: "invalid or disabled key" }));
       return;
     }
-    const tok = createUserSession(row.key_hash);
+    const tok = createUserSession(row.key_hash, raw);
     res.writeHead(200, {
       "Content-Type": "application/json",
       "Set-Cookie": `user_session=${tok}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
@@ -359,7 +359,7 @@ async function handleRequest(req, res) {
       }
 
       console.log(`[wx][signup] openid=${openid.slice(0,8)}… key=${newKey.prefix}… ip=${clientIp}`);
-      const tok = createUserSession(newKey.key_hash);
+      const tok = createUserSession(newKey.key_hash, newKey.raw);
       cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
       location = "/?wx_new=1";
     }
@@ -1492,6 +1492,7 @@ async function handleUserApi(req, res) {
       name: row.name,
       role: row.role,
       key_prefix: row.key_prefix,
+      raw_key: (ctx.rawKey && ctx.keyHash === row.key_hash) ? ctx.rawKey : null,
       free_quota: row.free_quota,
       free_used: row.free_used,
       free_reset_at: row.free_reset_at,

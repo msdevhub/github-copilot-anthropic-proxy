@@ -4,6 +4,103 @@ const SC = window.SharedCharts;
 let hourlyHits = [];
 let pollTimer = null;
 
+// ─── Resources section ─────────────────────────────────────────────────────
+const RES_BASE_ANTHROPIC = 'https://api.eagle.openclaws.co.uk';
+const RES_BASE_OPENAI = 'https://api.eagle.openclaws.co.uk/v1';
+let resKeyRaw = null;       // full key (when session has it)
+let resKeyMasked = null;    // mask form
+let resKeyShown = false;
+
+function maskKey(raw, prefix) {
+  if (raw && raw.length > 8) {
+    return raw.slice(0, 12) + '****' + raw.slice(-4);
+  }
+  if (prefix) return prefix + '****';
+  return '<请先登录>';
+}
+
+function currentKeyForCmd() {
+  return resKeyRaw || resKeyMasked || '<请先登录>';
+}
+
+function resTemplates(k) {
+  return {
+    cc: `npm i -g @anthropic-ai/claude-code\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nclaude`,
+    oc: `npm i -g opencode-ai\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nopencode`,
+    cx: `npm i -g @openai/codex\nexport OPENAI_BASE_URL=${RES_BASE_OPENAI}\nexport OPENAI_API_KEY=${k}\ncodex`,
+    ow: `hermes config set provider.anthropic.base_url ${RES_BASE_ANTHROPIC}\nhermes config set provider.anthropic.api_key ${k}`,
+  };
+}
+
+function renderResources(m) {
+  resKeyRaw = m.raw_key || null;
+  resKeyMasked = maskKey(m.raw_key, m.key_prefix);
+  const disp = document.getElementById('res-key-display');
+  if (disp) disp.textContent = resKeyShown && resKeyRaw ? resKeyRaw : resKeyMasked;
+  const toggleBtn = document.getElementById('res-key-toggle');
+  if (toggleBtn) {
+    toggleBtn.textContent = resKeyShown ? '隐藏' : '显示完整';
+    toggleBtn.disabled = !resKeyRaw;
+    toggleBtn.style.opacity = resKeyRaw ? '1' : '0.5';
+    toggleBtn.style.cursor = resKeyRaw ? 'pointer' : 'not-allowed';
+  }
+  const t = resTemplates(currentKeyForCmd());
+  const setPre = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  setPre('res-cc-pre', t.cc);
+  setPre('res-oc-pre', t.oc);
+  setPre('res-cx-pre', t.cx);
+  setPre('res-ow-pre', t.ow);
+}
+
+window.resToggle = function() {
+  const body = document.getElementById('res-body');
+  const arrow = document.getElementById('res-arrow');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  if (arrow) arrow.textContent = open ? '▲' : '▼';
+};
+
+window.resToggleKey = function() {
+  if (!resKeyRaw) return;
+  resKeyShown = !resKeyShown;
+  const disp = document.getElementById('res-key-display');
+  if (disp) disp.textContent = resKeyShown ? resKeyRaw : resKeyMasked;
+  const btn = document.getElementById('res-key-toggle');
+  if (btn) btn.textContent = resKeyShown ? '隐藏' : '显示完整';
+  // Also re-render commands so <USER_KEY> reflects the visible state
+  // (commands always use full when available; this just keeps the UI consistent)
+};
+
+window.resCopyKey = function(btn) {
+  const txt = resKeyRaw || resKeyMasked || '';
+  if (!txt) return;
+  navigator.clipboard.writeText(txt).then(() => {
+    const o = btn.textContent; btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = o; }, 1400);
+  });
+};
+
+window.resSwitch = function(k) {
+  document.querySelectorAll('[data-rk]').forEach(t => t.classList.toggle('active', t.dataset.rk === k));
+  ['cc','oc','cx','ow'].forEach(id => {
+    const p = document.getElementById('res-' + id);
+    if (p) p.style.display = (id === k) ? '' : 'none';
+  });
+};
+
+window.resCopyCmd = function(id, btn) {
+  const txt = document.getElementById(id).innerText;
+  navigator.clipboard.writeText(txt).then(() => {
+    const o = btn.textContent; btn.textContent = '已复制'; btn.classList.add('ok');
+    setTimeout(() => { btn.textContent = o; btn.classList.remove('ok'); }, 1400);
+  });
+};
+
+window.goAdmin = function() {
+  location.href = '/_a/ce233c02438f1ea04adaeb0c703468eb';
+};
+
 // ─── Login UI: tab switch + WeChat scan flow ────────────────────────────────
 function loginSwitch(tab) {
   document.querySelectorAll('.login-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
@@ -174,6 +271,13 @@ async function loadMe() {
   document.getElementById('acct-models').textContent = (m.allowed_models && m.allowed_models.length)
     ? m.allowed_models.join(', ')
     : 'all';
+
+  // Resources section: render mask + commands
+  renderResources(m);
+
+  // Admin button
+  const adminBtn = document.getElementById('btn-admin');
+  if (adminBtn) adminBtn.style.display = (m.role === 'admin') ? '' : 'none';
   document.getElementById('q-used').textContent = SC.fmt(m.free_used || 0);
   document.getElementById('q-total').textContent = m.unlimited ? '∞' : SC.fmt(m.free_quota || 0);
   document.getElementById('bal').textContent = m.unlimited ? '∞' : SC.fmt(m.balance_tokens || 0);
