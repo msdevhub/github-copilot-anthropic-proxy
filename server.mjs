@@ -127,7 +127,8 @@ async function handleRequest(req, res) {
   //   /callback   → admin dashboard HTML (Logto SPA handles the OAuth code exchange client-side;
   //                 the Logto redirect URI is configured against the root origin so we keep it here)
   const pathname = req.url.split("?")[0];
-  if (req.method === "GET" && (pathname === "/_admin" || pathname === "/_admin/" || pathname === "/_admin/index.html" || pathname === "/callback")) {
+  const ADMIN_PATH = process.env.ADMIN_PATH || "/_a/ce233c02438f1ea04adaeb0c703468eb";
+  if (req.method === "GET" && (pathname === ADMIN_PATH || pathname === ADMIN_PATH + "/" || pathname === ADMIN_PATH + "/index.html" || pathname === "/callback")) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(dashboardHTML());
     return;
