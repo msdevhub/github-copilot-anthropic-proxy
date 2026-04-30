@@ -279,6 +279,8 @@ async function handleRequest(req, res) {
     const nickname = (sp.get("nickname") || "").trim() || null;
     const avatarUrl = (sp.get("avatarUrl") || "").trim() || null;
 
+    try { console.log(`[wx][finalize] openid=${openid} ext=${sp.get("ext") || ""} ref=${sp.get("ref") || ""}`); } catch {}
+
     const redirect = (loc) => { res.writeHead(302, { Location: loc }); res.end(); };
 
     if (!token || !openid || !ts || !sig) return redirect("/?err=missing");
@@ -391,7 +393,7 @@ async function handleRequest(req, res) {
       // and settled later when the invitee's cumulative usage crosses
       // WX_INVITE_SETTLE_THRESHOLD (default 10k tokens). Defends against
       // self-invite / drive-by reward farming.
-      const ref = (sp.get("ref") || "").trim();
+      const ref = (sp.get("ext") || sp.get("ref") || "").trim();
       const REWARD = Number(process.env.WX_INVITE_REWARD || 50_000);
       const INVITE_IP_LIMIT = Number(process.env.WX_INVITE_IP_LIMIT || 5);
       if (ref && REWARD > 0) {

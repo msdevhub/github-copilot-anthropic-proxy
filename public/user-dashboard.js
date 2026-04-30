@@ -772,7 +772,7 @@ async function init() {
         if (cfg && cfg.enabled && cfg.gatewayBase && cfg.appName) {
           const refCode = url.searchParams.get('ref');
           const target = `${cfg.gatewayBase}/wx/oauth/start?app=${encodeURIComponent(cfg.appName)}` +
-            (refCode ? `&ref=${encodeURIComponent(refCode)}` : '') +
+            (refCode ? `&ext=${encodeURIComponent(refCode)}` : '') +
             `&_t=${Date.now()}`;
           window.location.href = target;
           return;
