@@ -113,9 +113,39 @@ async function handleRequest(req, res) {
   inFlightCount++;
   res.on('close', () => { inFlightCount--; });
 
-  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, anthropic-version, x-api-key");
+
+  // CORS scope:
+  //   - Public endpoints (proxy + wx login + pay-create + health): Allow-Origin: *
+  //   - Credentialed endpoints (/admin/*, /user/*, /api/user/*, dashboard /api/*):
+  //     restrict to CORS_ORIGINS whitelist (comma-separated). No "*" with credentials.
+  const __publicPath =
+    req.url === "/health"
+    || req.url.startsWith("/v1/")
+    || req.url.startsWith("/api/wx/config")
+    || req.url.startsWith("/api/wx/finalize")
+    || req.url.startsWith("/api/wx/payment-webhook")
+    || req.url.startsWith("/api/pay/create");
+  const __reqOrigin = (req.headers["origin"] || "").toString();
+  if (__publicPath) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  } else {
+    const allowed = (process.env.CORS_ORIGINS || "")
+      .split(",").map(s => s.trim()).filter(Boolean);
+    if (__reqOrigin && allowed.includes(__reqOrigin)) {
+      res.setHeader("Access-Control-Allow-Origin", __reqOrigin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else if (!__reqOrigin) {
+      // Same-origin / non-browser request — no CORS headers needed; allow through.
+    } else {
+      // Cross-origin from a non-whitelisted origin on a credentialed route — block.
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "cors_origin_not_allowed" }));
+      return;
+    }
+  }
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
   // ── Health check (no auth required) ─────────────────────────────────────────
@@ -202,18 +232,20 @@ async function handleRequest(req, res) {
       return;
     }
     const tok = createUserSession(row.key_hash, raw);
+    const __isHttps = req.headers["x-forwarded-proto"] === "https" || req.connection?.encrypted;
     res.writeHead(200, {
       "Content-Type": "application/json",
-      "Set-Cookie": `user_session=${tok}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
+      "Set-Cookie": `user_session=${tok}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400${__isHttps ? "; Secure" : ""}`,
     });
     res.end(JSON.stringify({ ok: true, name: row.name, role: row.role }));
     return;
   }
   if (req.method === "POST" && req.url === "/user/logout") {
     destroyUserSession(req);
+    const __isHttps2 = req.headers["x-forwarded-proto"] === "https" || req.connection?.encrypted;
     res.writeHead(200, {
       "Content-Type": "application/json",
-      "Set-Cookie": "user_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+      "Set-Cookie": `user_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${__isHttps2 ? "; Secure" : ""}`,
     });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -313,10 +345,12 @@ async function handleRequest(req, res) {
 
     let cookieValue;
     let location;
+    const __finalizeHttps = req.headers["x-forwarded-proto"] === "https" || req.connection?.encrypted;
+    const __secureSuffix = __finalizeHttps ? "; Secure" : "";
     if (boundKey && boundKey.status !== "disabled") {
       // Already bound → mint a normal user session and go to dashboard
       const tok = createUserSession(boundKey.key_hash, boundKey.display_raw || null);
-      cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
+      cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${__secureSuffix}`;
       location = "/";
     } else {
       // ── First-time signup: auto-create a wx_signup key with 30万 free quota ──
@@ -376,7 +410,7 @@ async function handleRequest(req, res) {
 
       console.log(`[wx][signup] openid=${openid.slice(0,8)}… key=${newKey.prefix}… ip=${clientIp}`);
       const tok = createUserSession(newKey.key_hash, newKey.raw);
-      cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`;
+      cookieValue = `user_session=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${__secureSuffix}`;
       location = "/?wx_new=1";
     }
     res.writeHead(302, { Location: location, "Set-Cookie": cookieValue });
