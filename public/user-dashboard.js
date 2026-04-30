@@ -611,6 +611,36 @@ async function loadPlan(meData) {
     bar.appendChild(fill);
     body.appendChild(bar);
 
+    // Token balance row (monthly users still consume tokens — bots like OpenClaw need visibility)
+    const paidQuota = Number(meData?.paid_quota || 0);
+    const balanceTok = Number(meData?.balance_tokens || 0);
+    const freeUsed = Number(meData?.free_used || 0);
+    const isUnlimited = !!meData?.unlimited;
+    const usedTokens = Math.max(0, paidQuota - balanceTok) + freeUsed;
+
+    const tokRow = document.createElement('div');
+    tokRow.style.cssText = 'margin-top:14px;font-size:12px;color:var(--text-3)';
+    if (isUnlimited) {
+      tokRow.textContent = '已使用 ' + usedTokens.toLocaleString() + ' tokens（无上限）';
+      body.appendChild(tokRow);
+    } else if (paidQuota > 0) {
+      tokRow.textContent = '总额度 ' + usedTokens.toLocaleString() + ' / ' + paidQuota.toLocaleString() + ' tokens';
+      body.appendChild(tokRow);
+      const tpct = Math.min(100, Math.round(usedTokens / paidQuota * 100));
+      const twarn = tpct >= 95 ? 'full' : (tpct >= 80 ? 'warn' : '');
+      const tbar = document.createElement('div');
+      tbar.className = 'quota-bar';
+      tbar.style.marginTop = '6px';
+      const tfill = document.createElement('div');
+      tfill.className = 'quota-fill' + (twarn ? ' ' + twarn : '');
+      tfill.style.width = tpct + '%';
+      tbar.appendChild(tfill);
+      body.appendChild(tbar);
+    } else if (freeUsed > 0) {
+      tokRow.textContent = '已使用 ' + usedTokens.toLocaleString() + ' tokens';
+      body.appendChild(tokRow);
+    }
+
     if (_planResetTimer) clearInterval(_planResetTimer);
     const fmtRemain = (s) => {
       if (s <= 0) return '0s';

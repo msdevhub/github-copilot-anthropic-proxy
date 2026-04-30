@@ -978,10 +978,72 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // GET /v1/models — return supported models list (needed by Claude Code)
+  // GET /v1/models — return supported models list (needed by Claude Code / Cursor)
   if (req.method === "GET" && req.url.startsWith("/v1/models")) {
+    const rows = getModelRegistry({ enabledOnly: true });
+    let pricingMap = {};
+    try { pricingMap = (await import("./lib/models-registry.mjs")).getAllPricing(); } catch {}
+    let dbRowGet = null;
+    try { dbRowGet = (await import("./lib/database.mjs")).db.prepare("SELECT raw_json FROM models WHERE id = ?"); } catch {}
+
+    const data = rows.map(m => {
+      // Parse capabilities from raw_json (synced from upstream Copilot /models)
+      let caps = null;
+      if (dbRowGet) {
+        try {
+          const r = dbRowGet.get(m.id);
+          if (r?.raw_json) {
+            const parsed = JSON.parse(r.raw_json);
+            caps = parsed?.capabilities || null;
+          }
+        } catch {}
+      }
+      const limits = caps?.limits || {};
+      const supports = caps?.supports || {};
+
+      const context_window =
+        m.context_length ?? m.contextWindow ??
+        (Number.isFinite(limits.max_context_window_tokens) ? limits.max_context_window_tokens : null);
+      const max_output_tokens =
+        m.max_output_tokens ?? m.max_tokens ??
+        (Number.isFinite(limits.max_output_tokens) ? limits.max_output_tokens : null);
+      const max_input_tokens =
+        (Number.isFinite(context_window) && Number.isFinite(max_output_tokens))
+          ? (context_window - max_output_tokens)
+          : (Number.isFinite(limits.max_prompt_tokens) ? limits.max_prompt_tokens : null);
+
+      const input_modalities = ["text"];
+      if (supports?.vision === true || limits?.vision) input_modalities.push("image");
+      const output_modalities = ["text"];
+
+      const p = pricingMap[m.id] || pricingMap._default || null;
+      const pricing = p ? {
+        input: p.input_multiplier ?? null,
+        output: p.output_multiplier ?? null,
+        cache_read: null,
+        cache_write: null,
+      } : null;
+
+      return {
+        id: m.id,
+        object: "model",
+        // keep existing fields for backward-compat with Claude Code / Cursor
+        display_name: m.display_name,
+        provider: m.provider,
+        protocol: m.protocol,
+        created_at: m.created_at,
+        // new enrichment
+        context_window: context_window ?? null,
+        max_output_tokens: max_output_tokens ?? null,
+        max_input_tokens: max_input_tokens ?? null,
+        input_modalities,
+        output_modalities,
+        pricing,
+      };
+    });
+
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ data: getModelRegistry({ enabledOnly: true }) }));
+    res.end(JSON.stringify({ data }));
     return;
   }
 
