@@ -10,3 +10,5 @@ tokens.json
 !.env.example
 .DS_Store
 
+
+*.bad.*
