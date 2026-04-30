@@ -13,7 +13,7 @@ import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getR
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
 import { checkApiKey, checkAdmin, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext } from "./lib/auth.mjs";
 import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
-import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream, getModelRegistry } from "./lib/openai-protocol.mjs";
+import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream, extractResponsesUsageNonStream, extractResponsesUsageStream, getModelRegistry } from "./lib/openai-protocol.mjs";
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request, maybeSettleInvite } from "./lib/keys-v2.mjs";
 import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing, seedPricingFromConfig } from "./lib/pricing.mjs";
 import * as modelsReg from "./lib/models-registry.mjs";
@@ -2087,21 +2087,11 @@ async function handleResponses(req, res) {
     const respText = Buffer.concat(respChunks).toString();
     logEntry.responseBody = respText;
 
-    // Responses API usage: try usage.input_tokens/output_tokens or prompt_tokens/completion_tokens
-    if (logEntry.stream) {
-      logEntry.usage = extractUsageStream(respText);
-    } else {
-      try {
-        const respJson = JSON.parse(respText);
-        const u = respJson.usage;
-        if (u) {
-          logEntry.usage = {
-            input: u.input_tokens ?? u.prompt_tokens ?? 0,
-            output: u.output_tokens ?? u.completion_tokens ?? 0,
-          };
-        }
-      } catch { /* ignore */ }
-    }
+    // Responses API usage: shape differs from chat.completions (input_tokens/output_tokens
+    // inside response.completed events for streaming; top-level usage for non-streaming).
+    logEntry.usage = logEntry.stream
+      ? extractResponsesUsageStream(respText)
+      : extractResponsesUsageNonStream(respText);
 
     if (apiKeyCheck.name && logEntry.usage) {
       recordTokenUsage(apiKeyCheck.name, (logEntry.usage.input || 0) + (logEntry.usage.output || 0));
