@@ -24,28 +24,32 @@ function currentKeyForCmd() {
 }
 
 function resTemplates(k) {
-  const openclawJson = `{
-  "models": {
-    "providers": {
-      "copilot-proxy": {
-        "baseUrl": "${RES_BASE_ANTHROPIC}",
-        "apiKey": "${k}",
-        "api": "anthropic-messages",
-        "authHeader": true,
-        "models": [
-          { "id": "copilot-proxy/claude-opus-4-7" },
-          { "id": "copilot-proxy/claude-sonnet-4-6" }
-        ]
-      }
-    }
-  },
-  "agents": { "defaults": { "model": { "primary": "copilot-proxy/claude-opus-4-7" } } }
-}`;
+  const eagleModels = 'gpt-5.5,gpt-5.2-codex,gpt-5-mini,claude-opus-4.7-1m-internal,claude-opus-4.7,claude-opus-4.6,claude-opus-4.5,claude-sonnet-4.6,claude-sonnet-4.5,claude-haiku-4.5,gemini-3.1-pro-preview,gemini-3-flash-preview';
+  const openclawJson = `EAGLE_API_KEY='${k}' && cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.eagle.$(date +%s) && jq --arg key "$EAGLE_API_KEY" '
+  ($eagle_models | split(",")) as $ids |
+  .models = (.models // {}) |
+  .models.providers = (.models.providers // {}) |
+  .models.providers.eagle = {
+    baseUrl: "${RES_BASE_OPENAI}",
+    apiKey: $key,
+    api: "openai-completions",
+    authHeader: false,
+    models: ($ids | map({id: ., name: .}))
+  } |
+  .agents = (.agents // {}) |
+  .agents.defaults = (.agents.defaults // {}) |
+  .agents.defaults.model = {
+    primary: "eagle/gpt-5.5",
+    fallbacks: ($ids | map(select(. != "gpt-5.5")) | map("eagle/" + .))
+  } |
+  .agents.defaults.models = ((.agents.defaults.models // {}) + ($ids | map({(("eagle/" + .)): {}}) | add))
+' --arg eagle_models '${eagleModels}' \\
+  ~/.openclaw/openclaw.json > /tmp/openclaw.eagle.json && mv /tmp/openclaw.eagle.json ~/.openclaw/openclaw.json && echo "eagle provider installed ✅"`;
   return {
     cc: `npm i -g @anthropic-ai/claude-code\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nclaude`,
     oc: `npm i -g opencode-ai\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nopencode`,
     cx: `npm i -g @openai/codex\nexport OPENAI_BASE_URL=${RES_BASE_OPENAI}\nexport OPENAI_API_KEY=${k}\ncodex`,
-    ow: `# 1) 安装\ncurl -fsSL https://openclaw.ai/install.sh | bash\n\n# 2) 编辑 ~/.openclaw/openclaw.json\n${openclawJson}\n\n# 3) 应用配置\nopenclaw gateway config.apply --file ~/.openclaw/openclaw.json`,
+    ow: `# 一键安装 eagle provider 到 ~/.openclaw/openclaw.json (会自动备份原配置)\n${openclawJson}`,
     hm: `hermes config set provider.anthropic.base_url ${RES_BASE_ANTHROPIC}\nhermes config set provider.anthropic.api_key ${k}`,
   };
 }
@@ -74,6 +78,15 @@ function renderResources(m) {
 window.resToggle = function() {
   const body = document.getElementById('res-body');
   const arrow = document.getElementById('res-arrow');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  if (arrow) arrow.textContent = open ? '▲' : '▼';
+};
+
+window.pricingToggle = function() {
+  const body = document.getElementById('pricing-body');
+  const arrow = document.getElementById('pricing-arrow');
   if (!body) return;
   const open = body.style.display !== 'none';
   body.style.display = open ? 'none' : '';
@@ -353,6 +366,103 @@ async function loadMe() {
       inviteCard.style.display = 'none';
     }
   }
+  // Plan card
+  await loadPlan(m);
+}
+
+let _planResetTimer = null;
+
+async function loadPlan(meData) {
+  const card = document.getElementById('plan-card');
+  const body = document.getElementById('plan-body');
+  if (!card || !body) return;
+  let p;
+  try {
+    const r = await fetch('/user/plan', { credentials: 'same-origin' });
+    if (!r.ok) { card.style.display = 'none'; return; }
+    p = await r.json();
+  } catch { card.style.display = 'none'; return; }
+
+  card.style.display = '';
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  if (p.plan_type === 'monthly_29' && p.plan_expires_at > nowSec) {
+    const daysLeft = Math.ceil((p.plan_expires_at - nowSec) / 86400);
+    const resetTs = p.window_reset_at;
+    const resetStr = resetTs
+      ? new Date(resetTs * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })
+      : '—';
+    const used = p.window_used || 0;
+    const quota = p.window_quota || 600;
+    const pct = Math.min(100, Math.round(used / quota * 100));
+    const warnCls = pct >= 95 ? 'full' : (pct >= 80 ? 'warn' : '');
+
+    body.textContent = '';
+
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px';
+    const nameSpan = document.createElement('div');
+    const labelA = document.createElement('span');
+    labelA.style.cssText = 'font-size:13px;color:#3dd68c;font-weight:600';
+    labelA.textContent = '包月畅用';
+    const labelB = document.createElement('span');
+    labelB.style.cssText = 'font-size:12px;color:var(--text-3);margin-left:8px';
+    labelB.textContent = '· 剩余 ' + daysLeft + ' 天';
+    nameSpan.appendChild(labelA);
+    nameSpan.appendChild(labelB);
+    const renewBtn = document.createElement('button');
+    renewBtn.style.cssText = 'background:transparent;border:1px solid #3dd68c;color:#3dd68c;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px';
+    renewBtn.textContent = '续费 ¥29/月';
+    renewBtn.onclick = () => window.startPayment('monthly_29');
+    topRow.appendChild(nameSpan);
+    topRow.appendChild(renewBtn);
+    body.appendChild(topRow);
+
+    const windowInfo = document.createElement('div');
+    windowInfo.style.cssText = 'margin-top:10px;font-size:12px;color:var(--text-3)';
+    windowInfo.setAttribute('data-countdown', '1');
+    windowInfo.textContent = '5h 窗口已用 ' + used + '/' + quota + ' 次，重置于 ' + resetStr + ' (CST)';
+    body.appendChild(windowInfo);
+
+    const bar = document.createElement('div');
+    bar.className = 'quota-bar';
+    bar.style.marginTop = '6px';
+    const fill = document.createElement('div');
+    fill.className = 'quota-fill' + (warnCls ? ' ' + warnCls : '');
+    fill.style.width = pct + '%';
+    bar.appendChild(fill);
+    body.appendChild(bar);
+
+    if (_planResetTimer) clearInterval(_planResetTimer);
+    _planResetTimer = setInterval(() => {
+      const now2 = Math.floor(Date.now() / 1000);
+      const diff = (p.window_reset_at || 0) - now2;
+      if (diff <= 0) { clearInterval(_planResetTimer); loadPlan(meData); return; }
+      const mm = String(Math.floor(diff / 60)).padStart(2, '0');
+      const ss = String(diff % 60).padStart(2, '0');
+      const el = body.querySelector('[data-countdown]');
+      if (el) el.textContent = '5h 窗口已用 ' + used + '/' + quota + ' 次，重置于 ' + resetStr + ' (CST，' + mm + ':' + ss + ' 后)';
+    }, 1000);
+  } else {
+    // Free user
+    body.textContent = '';
+    const freeLabel = document.createElement('div');
+    freeLabel.style.cssText = 'font-size:12px;color:var(--text-3);margin-bottom:10px';
+    freeLabel.textContent = '当前套餐：';
+    const bold = document.createElement('b');
+    bold.style.color = 'var(--text-2)';
+    bold.textContent = '免费版';
+    freeLabel.appendChild(bold);
+    const span2 = document.createTextNode('（使用赠送额度）');
+    freeLabel.appendChild(span2);
+    body.appendChild(freeLabel);
+
+    const upgradeBtn = document.createElement('button');
+    upgradeBtn.style.cssText = 'background:linear-gradient(90deg,#7170ff,#5a59e0);border:none;color:#fff;padding:9px 18px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;width:100%';
+    upgradeBtn.textContent = '升级到包月畅用 ¥29/月 — 5h 600次，30天';
+    upgradeBtn.onclick = () => window.startPayment('monthly_29');
+    body.appendChild(upgradeBtn);
+  }
 }
 
 function copyInviteLink(btn) {
@@ -545,7 +655,10 @@ function _startPaymentPoll() {
       const sEl = document.getElementById('pay-status');
       if (sEl) sEl.textContent = p.status;
       if (p.status === 'paid') {
-        _setPayMsg('付款成功！已到账 ' + SC.fmt(p.tokens_to_grant) + ' tokens', '#3a8a3a');
+        const successMsg = p.tokens_to_grant
+          ? '付款成功！已到账 ' + SC.fmt(p.tokens_to_grant) + ' tokens'
+          : '付款成功！包月套餐已开通';
+        _setPayMsg(successMsg, '#3a8a3a');
         clearInterval(_payState.pollTimer); _payState.pollTimer = null;
         await loadMe();
       } else if (p.status === 'expired' || p.status === 'disputed') {

@@ -387,6 +387,36 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // ── GET /api/user/plan — accepts Bearer OR user_session ──────────────────
+  if (req.method === "GET" && pathname === "/api/user/plan") {
+    let keyRow = null;
+    const apiCheck = checkApiKey(req, true);
+    if (apiCheck && apiCheck.valid && apiCheck.keyRow) {
+      keyRow = apiCheck.keyRow;
+    } else {
+      const ctx = getUserSessionContext(req);
+      if (ctx) keyRow = getKeyByHash(ctx.keyHash);
+    }
+    if (!keyRow || keyRow.status === "disabled") {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      plan_type: keyRow.plan_type || "free",
+      plan_expires_at: Number(keyRow.plan_expires_at || 0),
+      window_used: Number(keyRow.window_used || 0),
+      window_quota: 600,
+      window_reset_at: Number(keyRow.window_reset_at || 0),
+      free_quota: keyRow.free_quota,
+      free_used: keyRow.free_used,
+      paid_quota: Number(keyRow.paid_quota || 0),
+      balance_tokens: keyRow.balance_tokens,
+    }));
+    return;
+  }
+
   // ── Payment routes (user_session required, except webhook which uses HMAC) ─
   if (pathname === "/api/wx/payment-webhook" && req.method === "POST") {
     await handlePaymentWebhook(req, res);
@@ -898,6 +928,12 @@ async function handleRequest(req, res) {
   // ── POST /v1/chat/completions — OpenAI-compatible entry ───────────────────
   if (req.method === "POST" && req.url.startsWith("/v1/chat/completions")) {
     await handleChatCompletions(req, res);
+    return;
+  }
+
+  // ── POST /v1/responses — OpenAI Responses API (gpt-5.5, o-series, etc.) ───
+  if (req.method === "POST" && req.url.startsWith("/v1/responses")) {
+    await handleResponses(req, res);
     return;
   }
 
@@ -1509,6 +1545,23 @@ async function handleUserApi(req, res) {
     });
   }
 
+  // GET /user/plan
+  if (req.method === "GET" && path === "/user/plan") {
+    const row = viewerKey || (scopeHash ? getKeyByHash(scopeHash) : null);
+    if (!row) return send(200, { plan_type: "free", plan_expires_at: 0, window_used: 0, window_quota: 0, window_reset_at: 0, free_quota: 0, free_used: 0, paid_quota: 0, balance_tokens: 0 });
+    return send(200, {
+      plan_type: row.plan_type || "free",
+      plan_expires_at: Number(row.plan_expires_at || 0),
+      window_used: Number(row.window_used || 0),
+      window_quota: 600,
+      window_reset_at: Number(row.window_reset_at || 0),
+      free_quota: row.free_quota,
+      free_used: row.free_used,
+      paid_quota: Number(row.paid_quota || 0),
+      balance_tokens: row.balance_tokens,
+    });
+  }
+
   // GET /user/logs?limit=&offset=&since_id=&from=&to=&model=
   if (req.method === "GET" && path === "/user/logs") {
     const limit = Math.min(parseInt(url.searchParams.get("limit") || "50", 10), 1000);
@@ -1890,6 +1943,187 @@ async function handleChatCompletions(req, res) {
     }
   }
 }
+// ─── /v1/responses (OpenAI Responses API) ───────────────────────────────────
+async function handleResponses(req, res) {
+  const apiKeyCheck = checkApiKey(req, true);
+  if (!apiKeyCheck.valid) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      error: { type: "authentication_error", message: "Invalid API key.", code: "invalid_api_key" },
+    }));
+    return;
+  }
+
+  if (apiKeyCheck.name) {
+    const rlError = checkRateLimit(apiKeyCheck.name);
+    if (rlError) {
+      const resetSec = Math.ceil(Math.max(rlError.resetMs, 0) / 1000);
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "retry-after": String(resetSec),
+        "x-ratelimit-limit-requests": String(rlError.limit),
+        "x-ratelimit-remaining-requests": "0",
+        "x-ratelimit-reset-requests": new Date(Date.now() + rlError.resetMs).toISOString(),
+      });
+      res.end(JSON.stringify({ error: { type: "rate_limit_error", message: rlError.message } }));
+      return;
+    }
+    recordRequest(apiKeyCheck.name);
+  }
+  if (apiKeyCheck.keyRow) {
+    const v2rl = checkV2RateLimit(apiKeyCheck.keyRow);
+    if (v2rl) {
+      const resetSec = Math.ceil(Math.max(v2rl.resetMs, 0) / 1000);
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "retry-after": String(resetSec),
+        "x-ratelimit-limit-requests": String(v2rl.limit),
+        "x-ratelimit-remaining-requests": "0",
+      });
+      res.end(JSON.stringify({ error: { type: "rate_limit_error", message: v2rl.message } }));
+      return;
+    }
+    recordV2Request(apiKeyCheck.keyRow);
+  }
+
+  const startTime = Date.now();
+  const logEntry = { status: 0, model: null, stream: false, usage: null, preview: "", error: null, durationMs: 0, requestSummary: "" };
+  logEntry.apiKeyName = apiKeyCheck.name;
+  logEntry.keyHash = apiKeyCheck.keyRow?.key_hash || null;
+
+  try {
+    const boundTokenName = apiKeyCheck.tokenName;
+    const { token, baseUrl, tokenName } = boundTokenName
+      ? await getTokenByName(boundTokenName)
+      : await getToken();
+    logEntry.tokenName = tokenName;
+
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+
+    let parsed;
+    try { parsed = JSON.parse(body.toString()); } catch { parsed = null; }
+
+    if (!parsed || !parsed.model) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "invalid_request_error", message: "Request body must be JSON with a `model` field." } }));
+      return;
+    }
+
+    logEntry.model = parsed.model;
+    logEntry.stream = !!parsed.stream;
+    logEntry.requestSummary = `responses model=${parsed.model}`;
+
+    const pf = quotaPreflight(apiKeyCheck.keyRow, parsed, parsed.model);
+    if (!pf.ok) {
+      logEntry.status = pf.status;
+      logEntry.error = pf.body?.error?.message || `quota rejected (${pf.status})`;
+      logEntry.durationMs = Date.now() - startTime;
+      addLog(logEntry);
+      res.writeHead(pf.status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(pf.body));
+      return;
+    }
+
+    const forwardBody = JSON.stringify(parsed);
+    logEntry.requestBody = forwardBody;
+
+    const upstream = await fetch(`${baseUrl}/responses`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+        ...REQUIRED_HEADERS,
+      },
+      body: forwardBody,
+    });
+
+    logEntry.status = upstream.status;
+
+    if (upstream.status >= 400) {
+      let errBody = '';
+      try {
+        errBody = await upstream.text();
+        const errJson = JSON.parse(errBody);
+        const errMsg = errJson.error?.message || errJson.message || errBody.slice(0, 500);
+        logEntry.error = `HTTP ${upstream.status}: ${errMsg}`;
+      } catch {
+        logEntry.error = `HTTP ${upstream.status}: ${errBody.slice(0, 500)}`;
+      }
+      logEntry.durationMs = Date.now() - startTime;
+      addLog(logEntry);
+      res.writeHead(upstream.status, { "Content-Type": upstream.headers.get("content-type") || "application/json" });
+      res.end(errBody);
+      return;
+    }
+
+    const fwdHeaders = { "Content-Type": upstream.headers.get("content-type") || "application/json" };
+    if (upstream.headers.get("x-request-id")) fwdHeaders["x-request-id"] = upstream.headers.get("x-request-id");
+    res.writeHead(upstream.status, fwdHeaders);
+
+    if (!upstream.body) {
+      logEntry.durationMs = Date.now() - startTime;
+      addLog(logEntry);
+      res.end();
+      return;
+    }
+
+    const respChunks = [];
+    const reader = upstream.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+        respChunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    res.end();
+
+    logEntry.durationMs = Date.now() - startTime;
+    const respText = Buffer.concat(respChunks).toString();
+    logEntry.responseBody = respText;
+
+    // Responses API usage: try usage.input_tokens/output_tokens or prompt_tokens/completion_tokens
+    if (logEntry.stream) {
+      logEntry.usage = extractUsageStream(respText);
+    } else {
+      try {
+        const respJson = JSON.parse(respText);
+        const u = respJson.usage;
+        if (u) {
+          logEntry.usage = {
+            input: u.input_tokens ?? u.prompt_tokens ?? 0,
+            output: u.output_tokens ?? u.completion_tokens ?? 0,
+          };
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (apiKeyCheck.name && logEntry.usage) {
+      recordTokenUsage(apiKeyCheck.name, (logEntry.usage.input || 0) + (logEntry.usage.output || 0));
+    }
+    const logId = addLog(logEntry);
+    chargeFromLog(apiKeyCheck.keyRow, logEntry, logId);
+
+  } catch (err) {
+    logEntry.status = 502;
+    logEntry.error = fullError(err);
+    logEntry.durationMs = Date.now() - startTime;
+    addLog(logEntry);
+    console.error("[responses error]", fullError(err));
+    if (!res.headersSent) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "proxy_error", message: err.message } }));
+    } else {
+      res.end();
+    }
+  }
+}
+
 // --- Start ---
 const server = createServer(handleRequest);
 

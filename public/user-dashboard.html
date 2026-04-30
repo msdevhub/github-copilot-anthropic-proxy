@@ -177,6 +177,44 @@
         </div>
       </div>
 
+      <!-- 📦 套餐 -->
+      <div id="plan-card" class="user-card" style="display:none">
+        <div id="plan-head" style="font-size:13px;font-weight:600;color:var(--text-1);margin-bottom:10px">📦 套餐</div>
+        <div id="plan-body"></div>
+      </div>
+
+      <!-- 💰 计费倍率 -->
+      <div id="pricing-card" class="user-card">
+        <div id="pricing-head" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none" onclick="pricingToggle()">
+          <span style="font-size:13px;font-weight:600;color:var(--text-1)">💰 计费倍率</span>
+          <span id="pricing-arrow" style="color:var(--text-3);font-size:12px">▼</span>
+        </div>
+        <div id="pricing-body" style="margin-top:12px">
+          <div style="font-size:12px;color:var(--text-3);line-height:1.7;margin-bottom:10px">
+            扣费公式：<code style="color:var(--text-2)">cost = ceil(input × in_mult + output × out_mult)</code>。
+            input 倍率 = output 倍率 × 0.2（Anthropic 标准比例）。
+            30 万赠送额度 ≈ <b style="color:var(--text-1)">40K opus-4.7 输出</b> · <b style="color:var(--text-1)">300K sonnet 输出</b> · <b style="color:var(--text-1)">600K haiku 输出</b> · <b style="color:#3dd68c">1M+ 廉价档输出</b>。
+          </div>
+          <div class="table-wrap">
+            <table class="user-logs">
+              <thead><tr><th>档位</th><th>倍率(out)</th><th>模型</th></tr></thead>
+              <tbody>
+                <tr><td>🟠 1M 上下文</td><td>10x</td><td>opus-4.7-1m-internal</td></tr>
+                <tr><td>🟡 旗舰</td><td>7.5x</td><td>claude-opus-4.7 · gpt-5.5</td></tr>
+                <tr><td>🟢 高端</td><td>3x</td><td>claude-opus-4.5 · claude-opus-4.6</td></tr>
+                <tr><td>🔵 标准</td><td>1x</td><td>claude-sonnet-4.5/4.6 · gemini-3.1-pro · gpt-5.2-codex</td></tr>
+                <tr><td>🟣 廉价</td><td>0.5x</td><td>claude-haiku-4.5 · gemini-3-flash</td></tr>
+                <tr><td style="color:#3dd68c">⚪ 入门</td><td style="color:#3dd68c">0.3x</td><td>gpt-5-mini</td></tr>
+                <tr><td style="color:var(--text-4)">未识别模型</td><td style="color:var(--text-4)">1x</td><td style="color:var(--text-4)">默认按 Sonnet 价计</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div style="margin-top:10px;font-size:11px;color:var(--text-4);line-height:1.6;border-top:1px solid rgba(255,255,255,0.05);padding-top:8px">
+            包月用户：每次调用按倍率扣"加权次数"（1x 模型=1次，5x 模型=5次，向上取整）。5 小时 600 加权次数，CST 整点（00/05/10/15/20）重置。
+          </div>
+        </div>
+      </div>
+
       <div id="welcome-banner" class="user-card" style="display:none;border-color:#3a8a3a;background:linear-gradient(90deg,rgba(58,138,58,.08),transparent)">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
           <div>
