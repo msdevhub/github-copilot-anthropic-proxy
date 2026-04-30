@@ -319,6 +319,20 @@ async function handleRequest(req, res) {
       return redirect("/");
     }
 
+    // P1-14: if the request already carries a valid user_session for a DIFFERENT
+    // wx-bound key, refuse to silently overwrite it. Send the user back with
+    // a flag so the dashboard can prompt them to log out first.
+    try {
+      const existingCtx = getUserSessionContext(req);
+      if (existingCtx) {
+        const existingRow = getKeyByHash(existingCtx.keyHash);
+        if (existingRow && existingRow.wx_openid && existingRow.wx_openid !== openid) {
+          console.warn(`[wx][session-conflict] existing=${String(existingRow.wx_openid).slice(0,8)}… incoming=${openid.slice(0,8)}… — refusing overwrite`);
+          return redirect("/?err=session_conflict");
+        }
+      }
+    } catch {}
+
     // Idempotent upsert into wx_users (only fill empty fields on existing row)
     const now = new Date().toISOString();
     try {

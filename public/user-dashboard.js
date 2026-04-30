@@ -4,6 +4,44 @@ const SC = window.SharedCharts;
 let hourlyHits = [];
 let pollTimer = null;
 
+// ─── Toast (P1-11): minimal floating notifier ─────────────────────────────
+function showToast(msg, type) {
+  let host = document.getElementById('toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toast-host';
+    host.style.cssText = 'position:fixed;top:18px;right:18px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none';
+    document.body.appendChild(host);
+  }
+  const t = document.createElement('div');
+  const colors = {
+    error:   { bg: '#3a1d1d', bd: '#c0392b', fg: '#ff8b7a' },
+    warn:    { bg: '#3a311d', bd: '#d68c2b', fg: '#ffce82' },
+    info:    { bg: '#1d2a3a', bd: '#2b8cd6', fg: '#82c1ff' },
+    success: { bg: '#1d3a25', bd: '#3dd68c', fg: '#82ffae' },
+  };
+  const c = colors[type] || colors.info;
+  t.style.cssText = `background:${c.bg};border:1px solid ${c.bd};color:${c.fg};padding:9px 14px;border-radius:6px;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.4);max-width:340px;pointer-events:auto;cursor:pointer;animation:toastIn .25s ease`;
+  t.textContent = msg;
+  t.onclick = () => t.remove();
+  host.appendChild(t);
+  setTimeout(() => { try { t.remove(); } catch {} }, 5500);
+}
+
+// Translate HTTP error responses to friendly Chinese messages.
+function toastFromHttp(prefix, status, body) {
+  const map = {
+    402: '余额不足，请充值或升级套餐',
+    403: '权限不足或模型未启用',
+    409: '账户冲突：请先退出当前账号',
+    429: '调用频率过高，请稍后重试',
+  };
+  let msg = map[status];
+  if (!msg && status >= 500 && status < 600) msg = '服务暂时不可用';
+  if (!msg) msg = (body && body.error) ? body.error : `请求失败 (${status})`;
+  showToast(`${prefix}：${msg}`, status >= 500 ? 'warn' : 'error');
+}
+
 // ─── Resources section ─────────────────────────────────────────────────────
 const RES_BASE_ANTHROPIC = 'https://api.eagle.openclaws.co.uk';
 const RES_BASE_OPENAI = 'https://api.eagle.openclaws.co.uk/v1';
@@ -178,6 +216,14 @@ let wxCfg = null;          // { enabled, gatewayBase, appName }
 let wxEs = null;           // EventSource
 let wxCurrentToken = null;
 let wxRefreshTimer = null;
+// P1-8/P1-9: backoff state for SSE reconnect and QR refresh.
+let wxSseAttempts = 0;     // consecutive SSE errors since last success
+let wxQrFailCount = 0;     // consecutive QR generation failures
+let wxRateLimitedUntil = 0; // ms epoch — after a 429 from /qr endpoint
+const WX_SSE_BACKOFF_MS = [1000, 2000, 4000, 8000, 15000, 30000];
+const WX_SSE_MAX_ATTEMPTS = 10;
+const WX_QR_BACKOFF_MS = [800, 2000, 5000, 10000, 30000];
+const WX_QR_MAX_FAILS = 5;
 
 async function loadWxConfig() {
   if (wxCfg) return wxCfg;
@@ -241,22 +287,51 @@ async function ensureWxQr() {
 async function refreshWxQr() {
   if (wxEs) { try { wxEs.close(); } catch {} wxEs = null; }
   if (wxRefreshTimer) { clearTimeout(wxRefreshTimer); wxRefreshTimer = null; }
+
+  // P1-9: respect a recent 429 from the QR endpoint.
+  const nowMs = Date.now();
+  if (wxRateLimitedUntil > nowMs) {
+    const waitS = Math.ceil((wxRateLimitedUntil - nowMs) / 1000);
+    setQrSlotMessage(`服务限流中，请等待 ${waitS}s`, true);
+    setQrStatus('请求过于频繁', 'expired');
+    return;
+  }
+  // P1-9: hard stop after WX_QR_MAX_FAILS consecutive failures — manual button.
+  if (wxQrFailCount >= WX_QR_MAX_FAILS) {
+    setQrSlotMessage('多次加载失败，请检查网络后重试', true);
+    setQrStatus('已停止自动刷新', 'expired');
+    return;
+  }
+
   setQrSlotMessage('加载中…');
   setQrStatus('正在生成二维码…');
   try {
     const r = await fetch(`${wxCfg.gatewayBase}/wx/qr/${encodeURIComponent(wxCfg.appName)}`, { method: 'POST' });
-    const data = await r.json();
-    if (!data || !data.ok || !data.qrcodeUrl || !data.token) {
-      setQrSlotMessage('生成失败', true);
-      setQrStatus('请稍后重试', 'expired');
+    if (r.status === 429) {
+      wxRateLimitedUntil = Date.now() + 60000;
+      wxQrFailCount++;
+      setQrSlotMessage('服务限流，60s 后可重试', true);
+      setQrStatus('请稍后再试', 'expired');
       return;
     }
+    const data = await r.json();
+    if (!data || !data.ok || !data.qrcodeUrl || !data.token) {
+      wxQrFailCount++;
+      const delay = WX_QR_BACKOFF_MS[Math.min(wxQrFailCount - 1, WX_QR_BACKOFF_MS.length - 1)];
+      setQrSlotMessage('生成失败', wxQrFailCount >= WX_QR_MAX_FAILS);
+      setQrStatus(`将在 ${Math.ceil(delay/1000)}s 后重试 (${wxQrFailCount}/${WX_QR_MAX_FAILS})`, 'expired');
+      if (wxQrFailCount < WX_QR_MAX_FAILS) wxRefreshTimer = setTimeout(refreshWxQr, delay);
+      return;
+    }
+    wxQrFailCount = 0;
+    wxSseAttempts = 0;
     wxCurrentToken = data.token;
     setQrSlotImage(data.qrcodeUrl);
     setQrStatus('扫码关注「造悟者」公众号即登录');
 
     const es = new EventSource(`${wxCfg.gatewayBase}/wx/poll/${encodeURIComponent(data.token)}`);
     wxEs = es;
+    es.onopen = () => { wxSseAttempts = 0; };
     es.onmessage = (ev) => {
       let d = null;
       try { d = JSON.parse(ev.data); } catch { return; }
@@ -281,12 +356,25 @@ async function refreshWxQr() {
     es.onerror = () => {
       try { es.close(); } catch {}
       wxEs = null;
-      // Try to refresh after a brief delay
-      wxRefreshTimer = setTimeout(refreshWxQr, 1500);
+      // P1-8: exponential backoff. Cap at 30s. Stop auto-retry after 10 attempts.
+      wxSseAttempts++;
+      if (wxSseAttempts >= WX_SSE_MAX_ATTEMPTS) {
+        setQrSlotMessage('网络异常', true);
+        setQrStatus('已停止自动重连，可手动重试', 'expired');
+        return;
+      }
+      const delay = WX_SSE_BACKOFF_MS[Math.min(wxSseAttempts - 1, WX_SSE_BACKOFF_MS.length - 1)];
+      setQrStatus(`连接中断，${Math.ceil(delay/1000)}s 后重试 (${wxSseAttempts}/${WX_SSE_MAX_ATTEMPTS})`, 'expired');
+      wxRefreshTimer = setTimeout(refreshWxQr, delay);
     };
   } catch (e) {
-    setQrSlotMessage('网络错误', true);
+    wxQrFailCount++;
+    setQrSlotMessage('网络错误', wxQrFailCount >= WX_QR_MAX_FAILS);
     setQrStatus(String(e && e.message || e), 'expired');
+    if (wxQrFailCount < WX_QR_MAX_FAILS) {
+      const delay = WX_QR_BACKOFF_MS[Math.min(wxQrFailCount - 1, WX_QR_BACKOFF_MS.length - 1)];
+      wxRefreshTimer = setTimeout(refreshWxQr, delay);
+    }
   }
 }
 
@@ -384,12 +472,16 @@ async function loadMe() {
     if (m.invite_code) {
       inviteCard.style.display = '';
       const cfg = await loadWxConfig();
-      // Build invite URL pointing to gateway (public scan entry) with ?ref=
-      const base = (cfg && cfg.gatewayBase) ? cfg.gatewayBase : location.origin;
-      const inviteUrl = `${base}/wx/qr/${encodeURIComponent(cfg && cfg.appName || '')}?ref=${m.invite_code}`;
       const linkEl = document.getElementById('invite-link');
-      if (linkEl) linkEl.textContent = inviteUrl;
       const codeEl = document.getElementById('invite-code');
+      // P1-12: WeChat disabled → no scan URL; instruct manual code entry instead.
+      if (!cfg || cfg.enabled === false) {
+        if (linkEl) linkEl.textContent = `请将邀请码 ${m.invite_code} 告知朋友，让其登录后填入`;
+      } else {
+        const base = cfg.gatewayBase || location.origin;
+        const inviteUrl = `${base}/wx/qr/${encodeURIComponent(cfg.appName || '')}?ref=${m.invite_code}`;
+        if (linkEl) linkEl.textContent = inviteUrl;
+      }
       if (codeEl) codeEl.textContent = m.invite_code;
       const stats = m.invite_stats || { count: 0, reward_total: 0 };
       const cntEl = document.getElementById('invite-count');
@@ -413,12 +505,44 @@ async function loadPlan(meData) {
   let p;
   try {
     const r = await fetch('/user/plan', { credentials: 'same-origin' });
-    if (!r.ok) { card.style.display = 'none'; return; }
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      if (r.status !== 401) toastFromHttp('套餐信息', r.status, body);
+      card.style.display = 'none';
+      return;
+    }
     p = await r.json();
-  } catch { card.style.display = 'none'; return; }
+  } catch (e) {
+    showToast('套餐信息加载失败：' + (e?.message || 'network'), 'warn');
+    card.style.display = 'none';
+    return;
+  }
 
   card.style.display = '';
   const nowSec = Math.floor(Date.now() / 1000);
+
+  // P1-13: monthly_29 expired in last 7 days → orange banner with renew CTA.
+  const expiredCutoff = 7 * 86400;
+  const isExpiredMonthly =
+    p.plan_type === 'monthly_29'
+    && p.plan_expires_at > 0
+    && p.plan_expires_at <= nowSec
+    && (nowSec - p.plan_expires_at) <= expiredCutoff;
+
+  if (isExpiredMonthly) {
+    const daysAgo = Math.max(1, Math.floor((nowSec - p.plan_expires_at) / 86400));
+    body.textContent = '';
+    const banner = document.createElement('div');
+    banner.style.cssText = 'background:#3a311d;border:1px solid #d68c2b;color:#ffce82;padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:10px';
+    banner.textContent = `您的包月套餐已于 ${daysAgo} 天前到期，可重新订阅恢复畅用。`;
+    body.appendChild(banner);
+    const renewBtn = document.createElement('button');
+    renewBtn.style.cssText = 'background:linear-gradient(90deg,#d68c2b,#b87320);border:none;color:#fff;padding:9px 18px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;width:100%';
+    renewBtn.textContent = '重新订阅 ¥29/月';
+    renewBtn.onclick = () => window.startPayment('monthly_29');
+    body.appendChild(renewBtn);
+    return;
+  }
 
   if (p.plan_type === 'monthly_29' && p.plan_expires_at > nowSec) {
     const daysLeft = Math.ceil((p.plan_expires_at - nowSec) / 86400);
@@ -468,15 +592,35 @@ async function loadPlan(meData) {
     body.appendChild(bar);
 
     if (_planResetTimer) clearInterval(_planResetTimer);
-    _planResetTimer = setInterval(() => {
+    const fmtRemain = (s) => {
+      if (s <= 0) return '0s';
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      if (h > 0) return `${h}h${String(m).padStart(2,'0')}m${String(sec).padStart(2,'0')}s`;
+      return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    };
+    // P1-11: when window is exhausted, show explicit notice with reset time.
+    if (used >= quota && resetTs) {
+      const note = document.createElement('div');
+      note.style.cssText = 'margin-top:8px;padding:8px 12px;background:#3a1d1d;border:1px solid #c0392b;color:#ff8b7a;border-radius:6px;font-size:12px';
+      note.textContent = `本窗口配额已用尽，将于 ${resetStr} (CST) 重置`;
+      body.appendChild(note);
+    }
+    const tickReset = () => {
+      // P1-10: re-derive diff from Date.now() each tick (don't accumulate); handles tab-switch.
       const now2 = Math.floor(Date.now() / 1000);
       const diff = (p.window_reset_at || 0) - now2;
-      if (diff <= 0) { clearInterval(_planResetTimer); loadPlan(meData); return; }
-      const mm = String(Math.floor(diff / 60)).padStart(2, '0');
-      const ss = String(diff % 60).padStart(2, '0');
+      if (diff <= 0) {
+        clearInterval(_planResetTimer); _planResetTimer = null;
+        loadPlan(meData);
+        return;
+      }
       const el = body.querySelector('[data-countdown]');
-      if (el) el.textContent = '5h 窗口已用 ' + used + '/' + quota + ' 次，重置于 ' + resetStr + ' (CST，' + mm + ':' + ss + ' 后)';
-    }, 1000);
+      if (el) el.textContent = '5h 窗口已用 ' + used + '/' + quota + ' 次，重置于 ' + resetStr + ' (CST，' + fmtRemain(diff) + ' 后)';
+    };
+    tickReset();
+    _planResetTimer = setInterval(tickReset, 1000);
   } else {
     // Free user
     body.textContent = '';
@@ -509,8 +653,16 @@ function copyInviteLink(btn) {
 }
 
 async function loadLogs() {
-  const r = await fetch('/user/logs?limit=50', { credentials: 'same-origin' });
-  if (!r.ok) return;
+  let r;
+  try { r = await fetch('/user/logs?limit=50', { credentials: 'same-origin' }); }
+  catch (e) { showToast('日志加载失败：' + (e?.message || 'network'), 'warn'); return; }
+  if (!r.ok) {
+    if (r.status !== 401) {
+      const body = await r.json().catch(() => ({}));
+      toastFromHttp('日志', r.status, body);
+    }
+    return;
+  }
   const { logs } = await r.json();
   document.getElementById('logs-count').textContent = logs.length + ' rows';
   const body = document.getElementById('logs-body');
@@ -569,6 +721,7 @@ async function init() {
   const url = new URL(location.href);
   const wxErr = url.searchParams.get('err');
   const wxNew = url.searchParams.get('wx_new') === '1';
+  const wxConflict = wxErr === 'session_conflict';
 
   // Probe session
   const r = await fetch('/user/me', { credentials: 'same-origin' });
@@ -582,6 +735,7 @@ async function init() {
         missing: '微信回调参数缺失',
         wx_disabled: '微信登录暂未启用',
         db: '数据库错误',
+        session_conflict: '已存在登录会话，请先退出',
       })[wxErr] || ('登录失败：' + wxErr);
       setTimeout(() => setQrStatus(errMsg, 'expired'), 100);
     }
@@ -592,7 +746,9 @@ async function init() {
   // Logged in normally
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = '';
-  if (wxNew) {
+  if (wxConflict) {
+    setTimeout(() => showToast('检测到您已登录其他账号，扫码已忽略；如需切换，请先退出登录。', 'warn'), 200);
+  } else if (wxNew) {
     const welcome = document.getElementById('welcome-banner');
     if (welcome) welcome.style.display = '';
   }
@@ -616,21 +772,38 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// P1-10: when the tab becomes visible again, force an immediate refresh so
+// countdown/quota figures don't lag behind reality.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  // Only refresh when the dashboard is mounted (not on the login screen).
+  const app = document.getElementById('app');
+  if (app && app.style.display !== 'none') {
+    try { userRefresh(); } catch {}
+  }
+});
+
 init();
 
 // ─── Payment flow (wx-gateway personal_qr) ─────────────────────────────────
 let _payState = { payOrderId: null, pollTimer: null };
 
 window.startPayment = async function(pkgId) {
-  const r = await fetch('/api/pay/create', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({ package: pkgId }),
-  });
-  const data = await r.json();
+  let r;
+  try {
+    r = await fetch('/api/pay/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ package: pkgId }),
+    });
+  } catch (e) {
+    showToast('网络错误：' + (e?.message || 'network'), 'warn');
+    return;
+  }
+  const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    alert('创建订单失败：' + (data.error || r.status));
+    toastFromHttp('创建订单', r.status, data);
     return;
   }
   _payState.payOrderId = data.payOrderId;
