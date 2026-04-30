@@ -77,8 +77,8 @@ function resTemplates(k) {
   .agents = (.agents // {}) |
   .agents.defaults = (.agents.defaults // {}) |
   .agents.defaults.model = {
-    primary: "eagle/gpt-5.5",
-    fallbacks: ($ids | map(select(. != "gpt-5.5")) | map("eagle/" + .))
+    primary: "eagle/claude-opus-4.6",
+    fallbacks: ($ids | map(select(. != "claude-opus-4.6")) | map("eagle/" + .))
   } |
   .agents.defaults.models = ((.agents.defaults.models // {}) + ($ids | map({(("eagle/" + .)): {}}) | add))
 ' --arg eagle_models '${eagleModels}' \\
@@ -306,7 +306,10 @@ async function refreshWxQr() {
   setQrSlotMessage('加载中…');
   setQrStatus('正在生成二维码…');
   try {
-    const r = await fetch(`${wxCfg.gatewayBase}/wx/qr/${encodeURIComponent(wxCfg.appName)}`, { method: 'POST' });
+    // Forward ?ref=<code> from current URL to the gateway so signups via this device get attributed.
+    const refCode = new URLSearchParams(location.search).get('ref') || '';
+    const qrUrl = `${wxCfg.gatewayBase}/wx/qr/${encodeURIComponent(wxCfg.appName)}${refCode ? '?ref=' + encodeURIComponent(refCode) : ''}`;
+    const r = await fetch(qrUrl, { method: 'POST' });
     if (r.status === 429) {
       wxRateLimitedUntil = Date.now() + 60000;
       wxQrFailCount++;
@@ -478,8 +481,7 @@ async function loadMe() {
       if (!cfg || cfg.enabled === false) {
         if (linkEl) linkEl.textContent = `请将邀请码 ${m.invite_code} 告知朋友，让其登录后填入`;
       } else {
-        const base = cfg.gatewayBase || location.origin;
-        const inviteUrl = `${base}/wx/qr/${encodeURIComponent(cfg.appName || '')}?ref=${m.invite_code}`;
+        const inviteUrl = `${location.origin}/?ref=${m.invite_code}`;
         if (linkEl) linkEl.textContent = inviteUrl;
       }
       if (codeEl) codeEl.textContent = m.invite_code;
@@ -612,8 +614,13 @@ async function loadPlan(meData) {
       const now2 = Math.floor(Date.now() / 1000);
       const diff = (p.window_reset_at || 0) - now2;
       if (diff <= 0) {
+        // Stop the timer FIRST to prevent storm if loadPlan returns stale data.
         clearInterval(_planResetTimer); _planResetTimer = null;
-        loadPlan(meData);
+        // Throttle: don't refetch more than once per 30s even if data is stale.
+        if (!loadPlan._lastReload || Date.now() - loadPlan._lastReload > 30000) {
+          loadPlan._lastReload = Date.now();
+          loadPlan(meData);
+        }
         return;
       }
       const el = body.querySelector('[data-countdown]');
@@ -738,6 +745,20 @@ async function init() {
         session_conflict: '已存在登录会话，请先退出',
       })[wxErr] || ('登录失败：' + wxErr);
       setTimeout(() => setQrStatus(errMsg, 'expired'), 100);
+    }
+    // ── WeChat in-app browser: skip QR and go straight to OAuth ──
+    // Only when not coming back from an error (avoid redirect loops).
+    if (!wxErr && /MicroMessenger/i.test(navigator.userAgent || '')) {
+      try {
+        const cfg = await loadWxConfig();
+        if (cfg && cfg.enabled && cfg.gatewayBase && cfg.appName) {
+          const refCode = url.searchParams.get('ref');
+          const target = `${cfg.gatewayBase}/wx/oauth/start?app=${encodeURIComponent(cfg.appName)}` +
+            (refCode ? `&ref=${encodeURIComponent(refCode)}` : '');
+          window.location.href = target;
+          return;
+        }
+      } catch (e) { /* fallthrough to QR */ }
     }
     ensureWxQr();
     return;

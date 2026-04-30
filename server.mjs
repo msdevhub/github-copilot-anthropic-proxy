@@ -303,21 +303,13 @@ async function handleRequest(req, res) {
       return redirect("/?err=sig");
     }
 
-    // Replay protection: each finalize sig is single-use. On replay, if a key is
-    // already bound to this openid we re-mint a session cookie and redirect to /,
-    // otherwise just bounce to /. No side-effects (wx_users upsert / signup) re-run.
-    if (!recordWebhookNonce(`wx:${sig}`, Number(ts) || Date.now())) {
-      const bound = db.prepare("SELECT key_hash, status, display_raw FROM api_keys_v2 WHERE wx_openid = ? LIMIT 1").get(openid);
-      if (bound && bound.status !== "disabled") {
-        const tokSession = createUserSession(bound.key_hash, bound.display_raw || null);
-        const isHttps = req.headers["x-forwarded-proto"] === "https" || req.connection?.encrypted;
-        const cookie = `user_session=${tokSession}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${isHttps ? "; Secure" : ""}`;
-        res.writeHead(302, { Location: "/", "Set-Cookie": cookie });
-        res.end();
-        return;
-      }
-      return redirect("/");
-    }
+    // NOTE: previously a single-use nonce gate (recordWebhookNonce) ran here so
+    // each finalize sig could only be consumed once. We removed it to make the
+    // route fully idempotent — important for the WeChat in-app OAuth flow where
+    // the same finalize URL may be hit twice (e.g. user back-navigation, double
+    // redirect). The downstream wx_users upsert and api_keys_v2 lookup are
+    // already idempotent (only fill empty fields; one-key-per-openid via UNIQUE
+    // index), so re-execution is safe.
 
     // P1-14: if the request already carries a valid user_session for a DIFFERENT
     // wx-bound key, refuse to silently overwrite it. Send the user back with
@@ -333,10 +325,12 @@ async function handleRequest(req, res) {
       }
     } catch {}
 
-    // Idempotent upsert into wx_users (only fill empty fields on existing row)
+    // Idempotent upsert into wx_users — prefer unionid, fall back to openid
     const now = new Date().toISOString();
     try {
-      const existing = db.prepare("SELECT * FROM wx_users WHERE openid = ?").get(openid);
+      let existing = null;
+      if (unionid) existing = db.prepare("SELECT * FROM wx_users WHERE unionid = ?").get(unionid);
+      if (!existing) existing = db.prepare("SELECT * FROM wx_users WHERE openid = ?").get(openid);
       if (!existing) {
         db.prepare(`INSERT INTO wx_users (openid, unionid, nickname, avatar_url, created_at, last_login_at)
                     VALUES (?, ?, ?, ?, ?, ?)`).run(openid, unionid || null, nickname, avatarUrl, now, now);
@@ -346,7 +340,7 @@ async function handleRequest(req, res) {
         if (avatarUrl && !existing.avatar_url) { updates.push("avatar_url = ?"); params.push(avatarUrl); }
         if (unionid && !existing.unionid) { updates.push("unionid = ?"); params.push(unionid); }
         updates.push("last_login_at = ?"); params.push(now);
-        params.push(openid);
+        params.push(existing.openid);
         db.prepare(`UPDATE wx_users SET ${updates.join(", ")} WHERE openid = ?`).run(...params);
       }
     } catch (e) {
