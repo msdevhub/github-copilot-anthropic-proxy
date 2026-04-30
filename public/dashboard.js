@@ -1334,12 +1334,12 @@ async function v2LoadKeys() {
   if (!tbody) return;
   try {
     const r = await fetch('/admin/keys', { credentials: 'include' });
-    if (!r.ok) { tbody.innerHTML = `<tr><td colspan="10" style="color:var(--c-red);text-align:center">load failed: HTTP ${r.status}</td></tr>`; return; }
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan="11" style="color:var(--c-red);text-align:center">load failed: HTTP ${r.status}</td></tr>`; return; }
     const { keys } = await r.json();
     v2Keys = keys || [];
     v2RenderKeys();
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--c-red);text-align:center">${escapeHTML(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--c-red);text-align:center">${escapeHTML(e.message)}</td></tr>`;
   }
 }
 
@@ -1370,6 +1370,32 @@ async function v2Disable(hash) {
   if (!confirm('Disable this key? It will be rejected on subsequent requests.')) return;
   const r = await fetch(`/admin/keys/${hash}`, { method: 'DELETE', credentials: 'include' });
   if (!r.ok) { alert('disable failed: HTTP ' + r.status); return; }
+  v2LoadKeys();
+}
+
+async function v2GrantPlan(hash, name) {
+  const ans = prompt(`开通包月套餐给 "${name}"，输入天数 (默认 30):`, '30');
+  if (ans === null) return;
+  const days = Number(ans);
+  if (!Number.isFinite(days) || days <= 0) { alert('invalid days'); return; }
+  const r = await fetch(`/admin/keys/${hash}/plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ plan_type: 'monthly_29', days }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert('grant failed: ' + (j.error || r.status)); return; }
+  alert(`✓ 已开通 ${days} 天包月套餐`);
+  v2LoadKeys();
+}
+
+async function v2CancelPlan(hash, name) {
+  if (!confirm(`确认取消 "${name}" 的包月套餐？将立即降级为免费档。`)) return;
+  const r = await fetch(`/admin/keys/${hash}/plan/cancel`, { method: 'POST', credentials: 'include' });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert('cancel failed: ' + (j.error || r.status)); return; }
+  alert('✓ 已取消包月套餐');
   v2LoadKeys();
 }
 
@@ -1417,12 +1443,24 @@ function v2RenderKeys() {
   setText('k-disabled', v2Keys.filter(k => k.status !== 'active').length);
   setText('k-balance', fmt(v2Keys.reduce((s, k) => s + (k.balance_tokens || 0), 0)));
 
-  if (!rows.length) { tbody.textContent = ''; const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="10" style="text-align:center;color:var(--text-4);padding:20px">no keys match the filter</td>'; tbody.appendChild(tr); return; }
+  if (!rows.length) { tbody.textContent = ''; const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" style="text-align:center;color:var(--text-4);padding:20px">no keys match the filter</td>'; tbody.appendChild(tr); return; }
 
   const html = rows.map(k => {
     const free = k.unlimited ? '<span style="color:var(--accent-bright)">∞</span>' : `${fmt(k.free_used)} / ${fmt(k.free_quota)}`;
     const statusColor = k.status === 'active' ? 'var(--c-green)' : 'var(--c-red)';
     const expanded = v2ExpandedHash === k.key_hash;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const planActive = k.plan_type && k.plan_type !== 'free' && Number(k.plan_expires_at || 0) > nowSec;
+    let planCell;
+    if (planActive) {
+      const remainDays = Math.max(0, Math.ceil((Number(k.plan_expires_at) - nowSec) / 86400));
+      planCell = `<span style="color:var(--accent-bright)">包月畅用</span><div style="font-size:10px;color:var(--text-4)">剩余 ${remainDays} 天</div>`;
+    } else {
+      planCell = `<span style="color:var(--text-4)">免费</span>`;
+    }
+    const planBtn = planActive
+      ? `<button class="btn" onclick="v2CancelPlan('${k.key_hash}','${escapeAttr(k.name)}')">⏰取消月卡</button>`
+      : `<button class="btn" onclick="v2GrantPlan('${k.key_hash}','${escapeAttr(k.name)}')">🎁开通月卡</button>`;
     const main = `<tr class="keys-row" data-hash="${k.key_hash}" style="cursor:pointer" onclick="v2ToggleExpand('${k.key_hash}', event)">
         <td>${escapeHTML(k.name || '-')}${k.note ? `<div style="font-size:10px;color:var(--text-4)">${escapeHTML(k.note)}</div>` : ''}</td>
         <td><code style="font-size:11px">${escapeHTML(k.key_prefix || '')}…</code></td>
@@ -1431,6 +1469,7 @@ function v2RenderKeys() {
         <td>${k.unlimited ? 'yes' : 'no'}</td>
         <td>${free}</td>
         <td>${fmt(k.balance_tokens || 0)}</td>
+        <td>${planCell}</td>
         <td style="font-size:11px;color:var(--text-4)">${escapeHTML(k.last_used_at || '-')}</td>
         <td style="font-size:11px;color:var(--text-4)">${escapeHTML((k.created_at || '').slice(0, 16))}</td>
         <td style="white-space:nowrap" onclick="event.stopPropagation()">
@@ -1438,11 +1477,12 @@ function v2RenderKeys() {
           <button class="btn" onclick="v2OpenQuotaModal('${k.key_hash}')">Quota</button>
           <button class="btn" onclick="v2ResetFree('${k.key_hash}')">Reset</button>
           <button class="btn" onclick="v2ToggleUnlimited('${k.key_hash}', ${k.unlimited ? 1 : 0})">${k.unlimited ? '✓Unlim' : 'Unlim'}</button>
+          ${planBtn}
           ${k.status === 'active' ? `<button class="btn" onclick="v2Disable('${k.key_hash}')">Disable</button>` : `<button class="btn on" onclick="v2Enable('${k.key_hash}')">Enable</button>`}
         </td>
       </tr>`;
     if (!expanded) return main;
-    return main + `<tr class="keys-expand"><td colspan="10" id="ledger-${k.key_hash}" style="padding:10px 14px;background:rgba(255,255,255,.02)">Loading ledger…</td></tr>`;
+    return main + `<tr class="keys-expand"><td colspan="11" id="ledger-${k.key_hash}" style="padding:10px 14px;background:rgba(255,255,255,.02)">Loading ledger…</td></tr>`;
   }).join('');
   tbody.innerHTML = html;
 

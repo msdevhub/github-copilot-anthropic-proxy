@@ -17,7 +17,7 @@ import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStr
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request, maybeSettleInvite } from "./lib/keys-v2.mjs";
 import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing, seedPricingFromConfig } from "./lib/pricing.mjs";
 import * as modelsReg from "./lib/models-registry.mjs";
-import { quotaPreflight, chargeFromLog } from "./lib/quota-gate.mjs";
+import { quotaPreflight, chargeFromLog, computeNextWindowReset } from "./lib/quota-gate.mjs";
 import { createPayment, claimPayment, syncPaymentStatus, getPaymentByPayOrderId, listPaymentsByKey, applyWebhookEvent, verifyWebhookSig, sweepExpiredPayments, PACKAGES } from "./lib/payments.mjs";
 
 seedPricingFromConfig();
@@ -1286,6 +1286,10 @@ function publicKeyView(row) {
     created_at: row.created_at,
     last_used_at: row.last_used_at,
     note: row.note,
+    plan_type: row.plan_type || 'free',
+    plan_expires_at: Number(row.plan_expires_at || 0),
+    window_used: Number(row.window_used || 0),
+    window_reset_at: Number(row.window_reset_at || 0),
   };
 }
 
@@ -1318,12 +1322,47 @@ async function handleAdmin(req, res, adminCtx = { source: "unknown", adminKeyHas
     return send(201, { ok: true, key: created.raw, key_hash: created.key_hash, key_prefix: created.prefix });
   }
 
-  // /admin/keys/:hash[/topup|/reset-free|/ledger]
-  const m = path.match(/^\/admin\/keys\/([a-f0-9]{64})(?:\/(topup|reset-free|ledger))?$/);
+  // /admin/keys/:hash[/topup|/reset-free|/ledger|/plan|/plan/cancel]
+  const m = path.match(/^\/admin\/keys\/([a-f0-9]{64})(?:\/(topup|reset-free|ledger|plan|plan\/cancel))?$/);
   if (m) {
     const h = m[1], action = m[2];
     const row = getKeyByHash(h);
     if (!row) return send(404, { error: "key not found" });
+
+    if (action === "plan" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      const planType = body && body.plan_type;
+      const days = Number(body && body.days);
+      if (!planType || !PACKAGES[planType] || !PACKAGES[planType].plan_type) {
+        return send(400, { error: "invalid plan_type" });
+      }
+      if (!Number.isFinite(days) || days <= 0 || days > 3650) {
+        return send(400, { error: "days (1..3650) required" });
+      }
+      const nowSec = Math.floor(Date.now() / 1000);
+      const currentExpiry = Number(row.plan_expires_at || 0);
+      const baseExpiry = (row.plan_type === planType && currentExpiry > nowSec) ? currentExpiry : nowSec;
+      const newExpiry = baseExpiry + Math.floor(days * 86400);
+      const stacking = (row.plan_type === planType && currentExpiry > nowSec);
+      if (stacking) {
+        db.prepare("UPDATE api_keys_v2 SET plan_type=?, plan_expires_at=? WHERE key_hash=?")
+          .run(planType, newExpiry, h);
+      } else {
+        const nextReset = computeNextWindowReset(nowSec);
+        db.prepare("UPDATE api_keys_v2 SET plan_type=?, plan_expires_at=?, window_used=0, window_reset_at=? WHERE key_hash=?")
+          .run(planType, newExpiry, nextReset, h);
+      }
+      audit("key.plan_grant", h, { name: row.name, plan_type: planType, days, stacking, new_expiry: newExpiry });
+      const updated = getKeyByHash(h);
+      return send(200, { ok: true, key: publicKeyView(updated) });
+    }
+
+    if (action === "plan/cancel" && req.method === "POST") {
+      db.prepare("UPDATE api_keys_v2 SET plan_type='free', plan_expires_at=0 WHERE key_hash=?").run(h);
+      audit("key.plan_cancel", h, { name: row.name, prev_plan: row.plan_type, prev_expiry: row.plan_expires_at });
+      const updated = getKeyByHash(h);
+      return send(200, { ok: true, key: publicKeyView(updated) });
+    }
 
     if (action === "topup" && req.method === "POST") {
       const body = await readJsonBody(req);
