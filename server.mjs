@@ -12,7 +12,7 @@ import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
 import { checkApiKey, checkAdmin, checkUserSession, createUserSession, destroyUserSession, getUserSessionContext } from "./lib/auth.mjs";
-import { db, addLog, recordAdminAction, listAdminActions } from "./lib/database.mjs";
+import { db, addLog, recordAdminAction, listAdminActions, recordWebhookNonce, sweepWebhookNonces } from "./lib/database.mjs";
 import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStream, extractUsageStream, extractResponsesUsageNonStream, extractResponsesUsageStream, getModelRegistry } from "./lib/openai-protocol.mjs";
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request, maybeSettleInvite } from "./lib/keys-v2.mjs";
 import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing, seedPricingFromConfig } from "./lib/pricing.mjs";
@@ -269,6 +269,22 @@ async function handleRequest(req, res) {
         console.error(`[wx][sig-fail] token=${mask(token)} openid=${mask(openid)} unionid=${mask(unionid)} ts=${ts} skew=${Date.now()-Number(ts)}ms got=${sig?.slice(0,8)}.. expected=${expected.slice(0,8)}.. nickname=${nickname?'Y':'N'} avatar=${avatarUrl?'Y':'N'}`);
       } catch {}
       return redirect("/?err=sig");
+    }
+
+    // Replay protection: each finalize sig is single-use. On replay, if a key is
+    // already bound to this openid we re-mint a session cookie and redirect to /,
+    // otherwise just bounce to /. No side-effects (wx_users upsert / signup) re-run.
+    if (!recordWebhookNonce(`wx:${sig}`, Number(ts) || Date.now())) {
+      const bound = db.prepare("SELECT key_hash, status, display_raw FROM api_keys_v2 WHERE wx_openid = ? LIMIT 1").get(openid);
+      if (bound && bound.status !== "disabled") {
+        const tokSession = createUserSession(bound.key_hash, bound.display_raw || null);
+        const isHttps = req.headers["x-forwarded-proto"] === "https" || req.connection?.encrypted;
+        const cookie = `user_session=${tokSession}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${isHttps ? "; Secure" : ""}`;
+        res.writeHead(302, { Location: "/", "Set-Cookie": cookie });
+        res.end();
+        return;
+      }
+      return redirect("/");
     }
 
     // Idempotent upsert into wx_users (only fill empty fields on existing row)
@@ -1715,6 +1731,12 @@ async function handlePaymentWebhook(req, res) {
     return send(403, { error: "invalid_signature" });
   }
 
+  // Replay protection: each (sig) is single-use within the 24h sweep window.
+  if (!recordWebhookNonce(`pay:${sig}`, Number(ts) || Date.now())) {
+    console.log(`[pay][webhook] nonce replay payOrderId=${payOrderId} sig=${sig.slice(0,8)}…`);
+    return send(200, { ok: true, replay: true });
+  }
+
   try {
     const r = applyWebhookEvent({
       event,
@@ -2225,6 +2247,9 @@ server.listen(PORT, "127.0.0.1", () => {
   // Periodic sweep: flip pending/submitted payments past expires_at to expired.
   const sweepHandle = setInterval(() => sweepExpiredPayments(), 60_000);
   if (typeof sweepHandle.unref === "function") sweepHandle.unref();
+  // Periodic sweep: prune webhook_nonces older than 24h.
+  const nonceSweepHandle = setInterval(() => sweepWebhookNonces(), 3600_000);
+  if (typeof nonceSweepHandle.unref === "function") nonceSweepHandle.unref();
   // Log active token info
   const { token: activeGH, name: activeTokenName } = getActiveGitHubToken();
   if (activeGH) {
