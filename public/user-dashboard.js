@@ -54,6 +54,12 @@ function resTemplates(k) {
   };
 }
 
+// Render template using a non-secret placeholder so the <pre> blocks never
+// contain the raw key while it's hidden. The actual key is substituted at copy time.
+const RES_KEY_PLACEHOLDER = '<YOUR_KEY>';
+function templateForDisplay() { return resTemplates(resKeyShown && resKeyRaw ? resKeyRaw : RES_KEY_PLACEHOLDER); }
+function templateWithRealKey() { return resTemplates(resKeyRaw || resKeyMasked || RES_KEY_PLACEHOLDER); }
+
 function renderResources(m) {
   resKeyRaw = m.raw_key || null;
   resKeyMasked = maskKey(m.raw_key, m.key_prefix);
@@ -66,7 +72,7 @@ function renderResources(m) {
     toggleBtn.style.opacity = resKeyRaw ? '1' : '0.5';
     toggleBtn.style.cursor = resKeyRaw ? 'pointer' : 'not-allowed';
   }
-  const t = resTemplates(currentKeyForCmd());
+  const t = templateForDisplay();
   const setPre = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
   setPre('res-cc-pre', t.cc);
   setPre('res-oc-pre', t.oc);
@@ -100,13 +106,25 @@ window.resToggleKey = function() {
   if (disp) disp.textContent = resKeyShown ? resKeyRaw : resKeyMasked;
   const btn = document.getElementById('res-key-toggle');
   if (btn) btn.textContent = resKeyShown ? '隐藏' : '显示完整';
-  // Also re-render commands so <USER_KEY> reflects the visible state
-  // (commands always use full when available; this just keeps the UI consistent)
+  // Re-render the <pre> blocks so the placeholder/raw key visibility tracks the toggle.
+  const t = templateForDisplay();
+  const setPre = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  setPre('res-cc-pre', t.cc);
+  setPre('res-oc-pre', t.oc);
+  setPre('res-cx-pre', t.cx);
+  setPre('res-ow-pre', t.ow);
+  setPre('res-hm-pre', t.hm);
 };
 
 window.resCopyKey = function(btn) {
   const txt = resKeyRaw || resKeyMasked || '';
   if (!txt) return;
+  if (!resKeyShown && resKeyRaw) {
+    const ok = window.confirm(
+      '⚠️ Key 当前已隐藏，但复制内容是完整 key。\n请确认无人看屏 / 录屏后再粘贴。是否继续？'
+    );
+    if (!ok) return;
+  }
   navigator.clipboard.writeText(txt).then(() => {
     const o = btn.textContent; btn.textContent = '已复制';
     setTimeout(() => { btn.textContent = o; }, 1400);
@@ -122,11 +140,27 @@ window.resSwitch = function(k) {
 };
 
 window.resCopyCmd = function(id, btn) {
-  const txt = document.getElementById(id).innerText;
-  navigator.clipboard.writeText(txt).then(() => {
-    const o = btn.textContent; btn.textContent = '已复制'; btn.classList.add('ok');
-    setTimeout(() => { btn.textContent = o; btn.classList.remove('ok'); }, 1400);
-  });
+  // The on-screen <pre> may contain the placeholder (when key is hidden); the
+  // clipboard always gets the real key so the command actually works.
+  const tplKey = id.replace('res-', '').replace('-pre', ''); // 'cc' | 'oc' | 'cx' | 'ow' | 'hm'
+  const real = templateWithRealKey()[tplKey];
+  const txt = real != null ? real : (document.getElementById(id)?.innerText || '');
+  const proceed = () => {
+    navigator.clipboard.writeText(txt).then(() => {
+      const o = btn.textContent; btn.textContent = '已复制'; btn.classList.add('ok');
+      setTimeout(() => { btn.textContent = o; btn.classList.remove('ok'); }, 1400);
+    });
+  };
+  if (!resKeyShown && resKeyRaw) {
+    // Visible UI is masked but clipboard will contain the full key — confirm
+    // before pasting (typical cause of leaks: screen-share, recording, demo).
+    const ok = window.confirm(
+      '⚠️ Key 当前已隐藏，但复制内容包含完整 key（命令需要它才能运行）。\n' +
+      '请确认无人看屏 / 录屏后再粘贴。是否继续？'
+    );
+    if (!ok) return;
+  }
+  proceed();
 };
 
 window.goAdmin = function() {
