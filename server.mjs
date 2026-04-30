@@ -1621,10 +1621,19 @@ async function handleUserApi(req, res) {
         inviteStats = { count: r?.c || 0, reward_total: r?.rew || 0 };
       } catch { inviteStats = { count: 0, reward_total: 0 }; }
     }
+    let wx = null;
+    if (row.wx_openid) {
+      try {
+        const w = db.prepare("SELECT openid, nickname, avatar_url FROM wx_users WHERE openid = ?").get(row.wx_openid);
+        if (w) wx = { openid: w.openid, nickname: w.nickname || null, avatar_url: w.avatar_url || null };
+        else wx = { openid: row.wx_openid, nickname: null, avatar_url: null };
+      } catch { wx = { openid: row.wx_openid, nickname: null, avatar_url: null }; }
+    }
     return send(200, {
       name: row.name,
       role: row.role,
       key_prefix: row.key_prefix,
+      wx,
       raw_key: (ctx.rawKey && ctx.keyHash === row.key_hash) ? ctx.rawKey : null,
       free_quota: row.free_quota,
       free_used: row.free_used,

@@ -417,11 +417,29 @@ async function userRefresh() {
   await Promise.all([loadMe(), loadLogs(), loadStats(), loadUsage()]);
 }
 
+function renderHdrWx(wx) {
+  const wrap = document.getElementById('hdr-wx');
+  if (!wrap) return;
+  if (!wx || !wx.openid) { wrap.style.display = 'none'; return; }
+  const av = document.getElementById('hdr-wx-avatar');
+  const nick = document.getElementById('hdr-wx-nick');
+  if (wx.avatar_url) {
+    av.innerHTML = '<img src="' + wx.avatar_url.replace(/"/g,'&quot;') + '" alt="" style="width:100%;height:100%;object-fit:cover" referrerpolicy="no-referrer">';
+  } else {
+    av.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>';
+  }
+  let name = wx.nickname;
+  if (!name) name = '微信用户' + String(wx.openid).slice(-6);
+  nick.textContent = name;
+  wrap.style.display = 'inline-flex';
+}
+
 async function loadMe() {
   const r = await fetch('/user/me', { credentials: 'same-origin' });
   if (!r.ok) return;
   const m = await r.json();
   document.getElementById('user-name').textContent = m.name || '(unknown)';
+  renderHdrWx(m.wx);
   document.getElementById('acct-name').textContent = m.name || '—';
   document.getElementById('acct-role').textContent = m.role || 'user';
   document.getElementById('acct-prefix').textContent = m.key_prefix ? m.key_prefix + '…' : '—';
@@ -754,7 +772,8 @@ async function init() {
         if (cfg && cfg.enabled && cfg.gatewayBase && cfg.appName) {
           const refCode = url.searchParams.get('ref');
           const target = `${cfg.gatewayBase}/wx/oauth/start?app=${encodeURIComponent(cfg.appName)}` +
-            (refCode ? `&ref=${encodeURIComponent(refCode)}` : '');
+            (refCode ? `&ref=${encodeURIComponent(refCode)}` : '') +
+            `&_t=${Date.now()}`;
           window.location.href = target;
           return;
         }
