@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // ─── Module imports ──────────────────────────────────────────────────────────
-import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_PATH, __DIR, fullError } from "./lib/utils.mjs";
+import { PORT, COPILOT_TOKEN_URL, DASHBOARD_PATH, PUBLIC_DIR, API_KEYS_PATH, DB_PATH, __DIR, fullError, mask } from "./lib/utils.mjs";
 import { loadApiKeys, saveApiKeys } from "./lib/api-keys.mjs";
 import { checkRateLimit, recordRequest, recordTokenUsage, getKeyUsageStats, getRateLimitCounters, pruneCounters } from "./lib/rate-limit.mjs";
 import { loadTokens, saveTokens, getTokenType, maskToken, clearCachedToken, getActiveGitHubToken, deriveBaseUrl, exchangeGitHubToken, getTokenByName, getToken, getCachedTokenInfo } from "./lib/tokens.mjs";
@@ -266,7 +266,7 @@ async function handleRequest(req, res) {
     if (!sigOk) {
       try {
         const expected = createHmac("sha256", WX_GATEWAY_SECRET).update(`${token}|${openid}|${unionid}|${ts}`).digest("hex");
-        console.error(`[wx][sig-fail] token=${token} openid=${openid} unionid="${unionid}" ts=${ts} skew=${Date.now()-Number(ts)}ms got=${sig.slice(0,16)}.. expected=${expected.slice(0,16)}.. nickname=${nickname?'Y':'N'} avatar=${avatarUrl?'Y':'N'}`);
+        console.error(`[wx][sig-fail] token=${mask(token)} openid=${mask(openid)} unionid=${mask(unionid)} ts=${ts} skew=${Date.now()-Number(ts)}ms got=${sig?.slice(0,8)}.. expected=${expected.slice(0,8)}.. nickname=${nickname?'Y':'N'} avatar=${avatarUrl?'Y':'N'}`);
       } catch {}
       return redirect("/?err=sig");
     }
