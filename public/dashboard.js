@@ -100,15 +100,9 @@ async function refresh() {
   document.getElementById('s-tokens').textContent = fmt(stats.tokens);
   document.getElementById('s-avg').textContent = (stats.avgMs || 0) + 'ms';
 
-  // model pills
+  // model pills removed (redundant)
   const ms = document.getElementById('model-stats');
-  ms.innerHTML = (modelStats || []).map(m =>
-    `<div class="mpill">
-      <span class="mpill-dot"></span>
-      <span class="mpill-name">${esc(m.model)}</span>
-      <span class="mpill-meta">${m.count}x &middot; ${fmt(m.tokens)} tok &middot; ${m.avgMs}ms</span>
-    </div>`
-  ).join('');
+  if (ms) ms.innerHTML = '';
 
   // model filter
   const sel = document.getElementById('f-model');
@@ -329,15 +323,9 @@ async function loadLogsPage(isFirst) {
       document.getElementById('s-tokens').textContent = fmt(stats.tokens);
       document.getElementById('s-avg').textContent = (stats.avgMs || 0) + 'ms';
 
-      // model pills
+      // model pills removed (redundant)
       const ms = document.getElementById('model-stats');
-      ms.innerHTML = (modelStats || []).map(m =>
-        `<div class="mpill">
-          <span class="mpill-dot"></span>
-          <span class="mpill-name">${esc(m.model)}</span>
-          <span class="mpill-meta">${m.count}x &middot; ${fmt(m.tokens)} tok &middot; ${m.avgMs}ms</span>
-        </div>`
-      ).join('');
+      if (ms) ms.innerHTML = '';
 
       // model filter
       const sel = document.getElementById('f-model');

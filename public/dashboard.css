@@ -96,7 +96,17 @@ body::before {
   letter-spacing: -0.2px;
 }
 
-.hdr-right { display: flex; align-items: center; gap: 14px; }
+.hdr-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+.hdr-left { min-width: 0; flex-shrink: 1; }
+.hdr-user { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+.hdr-wx { flex: 0 0 auto; }
+
+/* ---- global scrollbar (dark theme) ---- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border, #333); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-2, #555); }
+* { scrollbar-width: thin; scrollbar-color: var(--border, #333) transparent; }
 
 .live-dot {
   width: 6px; height: 6px; border-radius: 50%;
