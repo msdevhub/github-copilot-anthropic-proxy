@@ -17,7 +17,7 @@ import { MODEL_REGISTRY, isClaudeModel, summarizeChatRequest, extractUsageNonStr
 import { listKeys, createKey, updateKey, disableKey, topupKey, resetFree, getKeyByHash, canAfford, isModelAllowed, chargeUsage, listLedger, countKeys, hashKey, createWxSignupKey, getKeyByOpenid, getKeyByInviteCode, addFreeQuota, checkV2RateLimit, recordV2Request, maybeSettleInvite } from "./lib/keys-v2.mjs";
 import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPricing, seedPricingFromConfig } from "./lib/pricing.mjs";
 import * as modelsReg from "./lib/models-registry.mjs";
-import { quotaPreflight, chargeFromLog, computeNextWindowReset } from "./lib/quota-gate.mjs";
+import { quotaPreflight, chargeFromLog, computeNextWindowReset, windowRolloverIfNeeded } from "./lib/quota-gate.mjs";
 import { createPayment, claimPayment, syncPaymentStatus, getPaymentByPayOrderId, listPaymentsByKey, applyWebhookEvent, verifyWebhookSig, sweepExpiredPayments, PACKAGES } from "./lib/payments.mjs";
 
 seedPricingFromConfig();
@@ -1675,6 +1675,12 @@ async function handleUserApi(req, res) {
       const r = maybeSettleInvite(row.key_hash);
       if (r && r.settled) row = getKeyByHash(row.key_hash) || row;
     } catch {}
+    try {
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (row.plan_type === 'monthly_29' && Number(row.plan_expires_at || 0) > nowSec) {
+        windowRolloverIfNeeded(row);
+      }
+    } catch {}
     let allowed = null;
     if (row.allowed_models) { try { allowed = JSON.parse(row.allowed_models); } catch {} }
     // Invite stats (only meaningful for keys that have an invite_code)
@@ -1719,6 +1725,12 @@ async function handleUserApi(req, res) {
   if (req.method === "GET" && path === "/user/plan") {
     const row = viewerKey || (scopeHash ? getKeyByHash(scopeHash) : null);
     if (!row) return send(200, { plan_type: "free", plan_expires_at: 0, window_used: 0, window_quota: 0, window_reset_at: 0, free_quota: 0, free_used: 0, paid_quota: 0, balance_tokens: 0 });
+    try {
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (row.plan_type === 'monthly_29' && Number(row.plan_expires_at || 0) > nowSec) {
+        windowRolloverIfNeeded(row);
+      }
+    } catch {}
     return send(200, {
       plan_type: row.plan_type || "free",
       plan_expires_at: Number(row.plan_expires_at || 0),

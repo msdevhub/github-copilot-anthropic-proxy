@@ -570,7 +570,7 @@ async function loadPlan(meData) {
     const resetStr = resetTs
       ? new Date(resetTs * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })
       : '—';
-    const used = p.window_used || 0;
+    const used = Math.min(p.window_used || 0, p.window_quota || 600);
     const quota = p.window_quota || 600;
     const pct = Math.min(100, Math.round(used / quota * 100));
     const warnCls = pct >= 95 ? 'full' : (pct >= 80 ? 'warn' : '');
