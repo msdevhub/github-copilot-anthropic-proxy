@@ -62,32 +62,12 @@ function currentKeyForCmd() {
 }
 
 function resTemplates(k) {
-  const eagleModels = 'gpt-5.5,gpt-5.2-codex,gpt-5-mini,claude-opus-4.7-1m-internal,claude-opus-4.7,claude-opus-4.6,claude-opus-4.5,claude-sonnet-4.6,claude-sonnet-4.5,claude-haiku-4.5,gemini-3.1-pro-preview,gemini-3-flash-preview';
-  const openclawJson = `EAGLE_API_KEY='${k}' && cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.eagle.$(date +%s) && jq --arg key "$EAGLE_API_KEY" '
-  ($eagle_models | split(",")) as $ids |
-  .models = (.models // {}) |
-  .models.providers = (.models.providers // {}) |
-  .models.providers.eagle = {
-    baseUrl: "${RES_BASE_OPENAI}",
-    apiKey: $key,
-    api: "openai-completions",
-    authHeader: false,
-    models: ($ids | map({id: ., name: .}))
-  } |
-  .agents = (.agents // {}) |
-  .agents.defaults = (.agents.defaults // {}) |
-  .agents.defaults.model = {
-    primary: "eagle/claude-opus-4.6",
-    fallbacks: ($ids | map(select(. != "claude-opus-4.6")) | map("eagle/" + .))
-  } |
-  .agents.defaults.models = ((.agents.defaults.models // {}) + ($ids | map({(("eagle/" + .)): {}}) | add))
-' --arg eagle_models '${eagleModels}' \\
-  ~/.openclaw/openclaw.json > /tmp/openclaw.eagle.json && mv /tmp/openclaw.eagle.json ~/.openclaw/openclaw.json && echo "eagle provider installed ✅"`;
+  const ow = `# 一键接入 copilot-proxy 到 ~/.openclaw/openclaw.json (交互式向导)\ncurl -fsSL "${RES_BASE_OPENAI.replace(/\/v1$/,'')}/install/openclaw?key=${k}" -o /tmp/cp-install.js && node /tmp/cp-install.js`;
   return {
     cc: `npm i -g @anthropic-ai/claude-code\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nclaude`,
     oc: `npm i -g opencode-ai\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nopencode`,
     cx: `npm i -g @openai/codex\nexport OPENAI_BASE_URL=${RES_BASE_OPENAI}\nexport OPENAI_API_KEY=${k}\ncodex`,
-    ow: `# 一键安装 eagle provider 到 ~/.openclaw/openclaw.json (会自动备份原配置)\n${openclawJson}`,
+    ow,
     hm: `hermes config set provider.anthropic.base_url ${RES_BASE_ANTHROPIC}\nhermes config set provider.anthropic.api_key ${k}`,
   };
 }

@@ -19,6 +19,7 @@ import { reloadPricing, getPricing, estimateCost, setModelPricing, deleteModelPr
 import * as modelsReg from "./lib/models-registry.mjs";
 import { quotaPreflight, chargeFromLog, computeNextWindowReset, windowRolloverIfNeeded } from "./lib/quota-gate.mjs";
 import { createPayment, claimPayment, syncPaymentStatus, getPaymentByPayOrderId, listPaymentsByKey, applyWebhookEvent, verifyWebhookSig, sweepExpiredPayments, PACKAGES } from "./lib/payments.mjs";
+import { buildOpenclawInstallScript } from "./lib/install-openclaw.mjs";
 
 seedPricingFromConfig();
 reloadPricing();
@@ -148,6 +149,26 @@ async function handleRequest(req, res) {
   }
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
+  // 公开的安装脚本端点：curl -fsSL .../install/openclaw?key=sk-xxx | node
+  if (req.method === "GET" && req.url.startsWith("/install/openclaw")) {
+    const u = new URL(req.url, "http://localhost");
+    const key = u.searchParams.get("key") || "";
+    if (!key.startsWith("sk-")) {
+      res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("// 用法: curl -fsSL https://api.eagle.openclaws.co.uk/install/openclaw?key=sk-xxx | node\n");
+      return;
+    }
+    const host = req.headers.host || "api.eagle.openclaws.co.uk";
+    const script = buildOpenclawInstallScript({
+      baseAnthropic: `https://${host}`,
+      baseOpenai: `https://${host}/v1`,
+      apiKey: key,
+    });
+    res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
+    res.end(script);
+    return;
+  }
+
   // ── Health check (no auth required) ─────────────────────────────────────────
   if (req.method === "GET" && req.url === "/health") {
     const stats = db.prepare("SELECT COUNT(*) as total_requests, SUM(CASE WHEN status >= 400 OR error IS NOT NULL THEN 1 ELSE 0 END) as error_count FROM logs").get();
@@ -197,6 +218,19 @@ async function handleRequest(req, res) {
     } catch {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found");
+    }
+    return;
+  }
+
+  // Favicon
+  if (req.method === "GET" && (req.url === "/favicon.svg" || req.url === "/favicon.ico")) {
+    try {
+      const content = readFileSync(join(PUBLIC_DIR, "favicon.svg"));
+      res.writeHead(200, { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "public, max-age=86400" });
+      res.end(content);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("not found");
     }
     return;
   }
@@ -585,7 +619,12 @@ async function handleRequest(req, res) {
     if (sinceId > 0) { where.push("id > ?"); params.push(sinceId); }
     const whereClause = where.length ? "WHERE " + where.join(" AND ") : "";
 
-    const logs = db.prepare(`SELECT id, ts, model, status, duration_ms, stream, input_tokens, output_tokens, preview, request_summary, error, token_name, api_key_name FROM logs ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, limit, sinceId > 0 ? 0 : offset);
+    const logs = db.prepare(`SELECT l.id, l.ts, l.model, l.status, l.duration_ms, l.stream, l.input_tokens, l.output_tokens, l.preview, l.request_summary, l.error, l.token_name, l.api_key_name,
+      w.nickname AS wx_nickname, w.avatar_url AS wx_avatar_url
+      FROM logs l
+      LEFT JOIN api_keys_v2 k ON k.key_hash = l.key_hash
+      LEFT JOIN wx_users w ON w.openid = k.wx_openid
+      ${whereClause ? whereClause.replace(/\b(ts|model|status|token_name|error|api_key_name|key_hash|id)\b/g, "l.$1") : ""} ORDER BY l.id DESC LIMIT ? OFFSET ?`).all(...params, limit, sinceId > 0 ? 0 : offset);
 
     // Skip expensive aggregate queries on incremental polls — stats are computed over the whole table.
     if (sinceId > 0) {
@@ -1020,8 +1059,8 @@ async function handleRequest(req, res) {
       const pricing = p ? {
         input: p.input_multiplier ?? null,
         output: p.output_multiplier ?? null,
-        cache_read: null,
-        cache_write: null,
+        cache_read: p.cache_read_multiplier ?? null,
+        cache_write: p.cache_write_multiplier ?? null,
       } : null;
 
       return {
@@ -1275,7 +1314,15 @@ async function handleRequest(req, res) {
       logEntry.responseBody = respText;
       if (!logEntry.stream) {
         const respJson = JSON.parse(respText);
-        logEntry.usage = respJson.usage ? { input: respJson.usage.input_tokens || 0, output: respJson.usage.output_tokens || 0 } : null;
+        if (respJson.usage) {
+          const u = respJson.usage;
+          logEntry.usage = {
+            input: u.input_tokens || 0,
+            output: u.output_tokens || 0,
+            cache_read: u.cache_read_input_tokens || 0,
+            cache_write: u.cache_creation_input_tokens || 0,
+          };
+        } else { logEntry.usage = null; }
       } else {
         const lines = respText.split("\n");
         for (const line of lines) {
@@ -1283,11 +1330,14 @@ async function handleRequest(req, res) {
           try {
             const evt = JSON.parse(line.slice(6));
             if (evt.type === "message_start" && evt.message?.usage) {
-              logEntry.usage = logEntry.usage || { input: 0, output: 0 };
-              logEntry.usage.input = evt.message.usage.input_tokens || 0;
+              const u = evt.message.usage;
+              logEntry.usage = logEntry.usage || { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+              logEntry.usage.input = u.input_tokens || 0;
+              logEntry.usage.cache_read = u.cache_read_input_tokens || 0;
+              logEntry.usage.cache_write = u.cache_creation_input_tokens || 0;
             }
             if (evt.type === "message_delta" && evt.usage) {
-              logEntry.usage = logEntry.usage || { input: 0, output: 0 };
+              logEntry.usage = logEntry.usage || { input: 0, output: 0, cache_read: 0, cache_write: 0 };
               logEntry.usage.output = evt.usage.output_tokens || 0;
             }
           } catch {}
@@ -1328,11 +1378,19 @@ function publicKeyView(row) {
   if (!row) return null;
   let allowed = null;
   if (row.allowed_models) { try { allowed = JSON.parse(row.allowed_models); } catch {} }
+  let wx = null;
+  if (row.wx_openid) {
+    try {
+      const w = db.prepare("SELECT nickname, avatar_url FROM wx_users WHERE openid = ?").get(row.wx_openid);
+      wx = { openid: row.wx_openid, nickname: (w && w.nickname) || null, avatar_url: (w && w.avatar_url) || null };
+    } catch { wx = { openid: row.wx_openid, nickname: null, avatar_url: null }; }
+  }
   return {
     key_hash: row.key_hash,
     key_prefix: row.key_prefix,
     name: row.name,
     role: row.role,
+    wx,
     balance_tokens: row.balance_tokens,
     free_quota: row.free_quota,
     free_used: row.free_used,

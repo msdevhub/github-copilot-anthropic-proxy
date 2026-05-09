@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f2126"/>
+      <stop offset="1" stop-color="#0e1014"/>
+    </linearGradient>
+    <linearGradient id="fry" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe28a"/>
+      <stop offset="1" stop-color="#e6a51d"/>
+    </linearGradient>
+    <linearGradient id="box" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6b6b"/>
+      <stop offset="1" stop-color="#c92a2a"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#bg)"/>
+
+  <!-- fries: tighter packing, angled tops -->
+  <g>
+    <path d="M16 16 L21 13 L21 36 L16 36 Z" fill="url(#fry)" opacity="0.88"/>
+    <path d="M22 9  L27 12 L27 36 L22 36 Z" fill="url(#fry)"/>
+    <path d="M28 14 L33 11 L33 36 L28 36 Z" fill="url(#fry)"/>
+    <path d="M34 7  L39 10 L39 36 L34 36 Z" fill="url(#fry)"/>
+    <path d="M40 15 L45 12 L45 36 L40 36 Z" fill="url(#fry)"/>
+    <path d="M46 18 L51 14 L51 36 L46 36 Z" fill="url(#fry)" opacity="0.88"/>
+  </g>
+
+  <!-- red carton (taller, brighter) -->
+  <path d="M11 34 L53 34 L49 58 Q49 60 47 60 L17 60 Q15 60 15 58 Z" fill="url(#box)" stroke="#ff8888" stroke-width="0.8"/>
+
+  <!-- bold white stripes (3 only, thick) -->
+  <g fill="#ffffff">
+    <rect x="18" y="36" width="4" height="22" rx="0.5"/>
+    <rect x="30" y="36" width="4" height="22" rx="0.5"/>
+    <rect x="42" y="36" width="4" height="22" rx="0.5"/>
+  </g>
+
+  <!-- bottom shadow on carton -->
+  <path d="M16 52 L48 52 L47 58 Q47 60 45 60 L19 60 Q17 60 17 58 Z" fill="rgba(0,0,0,0.22)"/>
+</svg>

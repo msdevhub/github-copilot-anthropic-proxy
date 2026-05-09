@@ -141,6 +141,18 @@ console.log("\n→ Test 7: pricing.mjs integration (DB → computeCost)");
   assert(cost === 1500, `computeCost = 1000*1.0 + 100*5.0 = ${cost}`);
   const r = getRatesForModel("claude-opus-4-7");
   assert(r.input_multiplier === 1.0, "pricing.mjs reads from DB");
+
+  // Cache-hit billing: NULL multipliers default to 0.1×input / 1.25×input
+  assert(r.cache_read_multiplier === 0.1, `default cache_read = input*0.1 (got ${r.cache_read_multiplier})`);
+  assert(r.cache_write_multiplier === 1.25, `default cache_write = input*1.25 (got ${r.cache_write_multiplier})`);
+  // sonnet-4-6 acceptance case
+  reg.upsertPricing("claude-sonnet-4-6", 3, 15, 0.3, 3.75);
+  const sonnetCost = computeCost("claude-sonnet-4-6", 900, 242, 128000, 0);
+  assert(sonnetCost === 44730, `sonnet-4-6 cache_read cost = 44730 (got ${sonnetCost})`);
+  // explicit cache_write
+  reg.upsertPricing("model-cw-test", 2, 10, 0.2, 2.5);
+  const cwCost = computeCost("model-cw-test", 1000, 100, 0, 800);
+  assert(cwCost === 5000, `cache_write cost = 5000 (got ${cwCost})`);
 }
 
 console.log(`\n${failures === 0 ? "✅ ALL TESTS PASSED" : `❌ ${failures} FAILURE(S)`}`);

@@ -140,7 +140,7 @@ async function refresh() {
     let rows = `<tr onclick="openDetail(${l.id})">
       <td class="c-ts">${l.ts || ''}</td>
       <td class="c-token">${esc(l.token_name || '-')}</td>
-      <td class="c-token">${esc(l.api_key_name || '-')}</td>
+      <td class="c-token">${userCell(l)}</td>
       <td class="c-model">${esc(l.model || '-')}</td>
       <td><span class="c-status ${sc}">${l.status}</span></td>
       <td class="c-dur">${l.duration_ms ? l.duration_ms + 'ms' : '-'}</td>
@@ -197,7 +197,7 @@ function rowHTML(l) {
   return `<tr onclick="openDetail(${l.id})">
     <td class="c-ts">${l.ts || ''}</td>
     <td class="c-token">${esc(l.token_name || '-')}</td>
-    <td class="c-token">${esc(l.api_key_name || '-')}</td>
+    <td class="c-token">${userCell(l)}</td>
     <td class="c-model">${esc(l.model || '-')}</td>
     <td><span class="c-status ${sc}">${l.status}</span></td>
     <td class="c-dur">${l.duration_ms ? l.duration_ms + 'ms' : '-'}</td>
@@ -205,6 +205,17 @@ function rowHTML(l) {
     <td>${badge}</td>
     <td class="${previewClass}">${esc(preview)}</td>
   </tr>`;
+}
+
+function userCell(l) {
+  const nick = l.wx_nickname;
+  const avatar = l.wx_avatar_url;
+  const fallback = l.api_key_name || '-';
+  if (nick || avatar) {
+    const img = avatar ? `<img src="${esc(avatar)}" referrerpolicy="no-referrer" style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:4px;object-fit:cover">` : '';
+    return `${img}<span style="vertical-align:middle">${esc(nick || fallback)}</span>`;
+  }
+  return esc(fallback);
 }
 
 // ---- Sort ----
@@ -1263,10 +1274,6 @@ function handleBreakpointChanges() {
     const isMobile = e.matches;
 
     // Adjust table sticky header position
-    const thead = document.querySelector('.tbl thead');
-    if (thead) {
-      thead.style.top = isMobile ? '106px' : '96px';
-    }
 
     // Re-initialize mobile features
     if (isMobile) {
@@ -1450,7 +1457,7 @@ function v2RenderKeys() {
       ? `<button class="btn" onclick="v2CancelPlan('${k.key_hash}','${escapeAttr(k.name)}')">⏰取消月卡</button>`
       : `<button class="btn" onclick="v2GrantPlan('${k.key_hash}','${escapeAttr(k.name)}')">🎁开通月卡</button>`;
     const main = `<tr class="keys-row" data-hash="${k.key_hash}" style="cursor:pointer" onclick="v2ToggleExpand('${k.key_hash}', event)">
-        <td>${escapeHTML(k.name || '-')}${k.note ? `<div style="font-size:10px;color:var(--text-4)">${escapeHTML(k.note)}</div>` : ''}</td>
+        <td>${k.wx && (k.wx.nickname || k.wx.avatar_url) ? `${k.wx.avatar_url ? `<img src="${escapeAttr(k.wx.avatar_url)}" referrerpolicy="no-referrer" style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:4px;object-fit:cover">` : ''}<span style="vertical-align:middle">${escapeHTML(k.wx.nickname || k.name || '-')}</span><div style="font-size:10px;color:var(--text-4);margin-top:2px">${escapeHTML(k.name || '-')}</div>` : escapeHTML(k.name || '-')}${k.note ? `<div style="font-size:10px;color:var(--text-4)">${escapeHTML(k.note)}</div>` : ''}</td>
         <td><code style="font-size:11px">${escapeHTML(k.key_prefix || '')}…</code></td>
         <td>${k.role}</td>
         <td><span style="color:${statusColor}">${k.status}</span></td>
