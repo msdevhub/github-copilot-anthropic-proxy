@@ -101,12 +101,57 @@ curl https://api.eagle.openclaws.co.uk/v1/messages \
   -d '{"model":"claude-sonnet-4.6","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
-### curl (OpenAI Chat Completions)
+### curl (OpenAI Chat Completions) — gpt-5.4 / 5.4-mini / 5.3-codex / Gemini all use this
 ```bash
 curl https://api.eagle.openclaws.co.uk/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H "content-type: application/json" \
   -d '{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}'
 ```
+
+Gemini works the **same way via OpenAI protocol** (no separate Google SDK needed):
+```bash
+curl https://api.eagle.openclaws.co.uk/v1/chat/completions \
+  -H "Authorization: Bearer $KEY" -H "content-type: application/json" \
+  -d '{"model":"gemini-3.1-pro-preview","messages":[{"role":"user","content":"hi"}]}'
+```
+
+### curl (OpenAI **Responses** API) — required for **gpt-5.5** and o-series reasoning models
+GPT-5.5 (and reasoning-only models) **reject `/chat/completions` with HTTP 400** ("model gpt-5.5 is not accessible via the /chat/completions endpoint"). Use `/v1/responses` instead — different endpoint, different request shape:
+```bash
+curl https://api.eagle.openclaws.co.uk/v1/responses \
+  -H "Authorization: Bearer $KEY" -H "content-type: application/json" \
+  -d '{
+    "model": "gpt-5.5",
+    "input": "hi",
+    "reasoning": { "effort": "medium" },
+    "max_output_tokens": 1024
+  }'
+```
+Key differences vs Chat Completions:
+- Endpoint: `/v1/responses` (not `/v1/chat/completions`)
+- Body uses `input` (string or content array), not `messages`
+- `max_output_tokens` (not `max_tokens`)
+- Optional `reasoning.effort` = `low | medium | high` for thinking budget
+- Response: `output[]` array with `output_text` / reasoning items, plus `usage.input_tokens_details.cached_tokens` for cache hits
+
+Python SDK ≥ 1.50 supports it natively:
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://api.eagle.openclaws.co.uk/v1", api_key="sk-proxy-xxx")
+r = client.responses.create(model="gpt-5.5", input="hi", reasoning={"effort":"medium"}, max_output_tokens=1024)
+print(r.output_text)
+```
+
+**For CLI tools**: in Codex's `~/.codex/config.toml`, set `wire_api = "responses"` on the provider so it routes gpt-5.5 correctly. Cursor handles this automatically when you pick gpt-5.5 from the model list.
+
+### Quick endpoint cheat-sheet (which model → which endpoint)
+| Model family | Endpoint | Body shape |
+|---|---|---|
+| `claude-*` | `/v1/messages` | Anthropic |
+| `gpt-4*`, `gpt-5`, `gpt-5.4*`, `gpt-5.3-codex`, `gemini-*`, `o3-mini` | `/v1/chat/completions` | OpenAI Chat |
+| `gpt-5.5`, future reasoning models | `/v1/responses` | OpenAI Responses |
+
+When unsure, fetch `/v1/models` and check the `protocol` field; if a `chat/completions` call returns "not accessible via the /chat/completions endpoint", retry against `/v1/responses` with the body conversion above.
 
 ### Python (OpenAI SDK)
 ```python
