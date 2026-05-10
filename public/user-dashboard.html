@@ -158,6 +158,7 @@
             <div class="qs-tab" data-rk="cx" onclick="resSwitch('cx')">Codex</div>
             <div class="qs-tab" data-rk="ow" onclick="resSwitch('ow')">OpenClaw</div>
             <div class="qs-tab" data-rk="hm" onclick="resSwitch('hm')">Hermes</div>
+            <div class="qs-tab" data-rk="ag" onclick="resSwitch('ag')">🪄 Agent 一键</div>
           </div>
           <div class="res-panel active" id="res-cc" style="position:relative">
             <button class="qs-copy" onclick="resCopyCmd('res-cc-pre', this)">复制</button>
@@ -178,6 +179,13 @@
           <div class="res-panel" id="res-hm" style="display:none;position:relative">
             <button class="qs-copy" onclick="resCopyCmd('res-hm-pre', this)">复制</button>
             <pre class="qs-pre" id="res-hm-pre"></pre>
+          </div>
+          <div class="res-panel" id="res-ag" style="display:none;position:relative">
+            <div style="font-size:12px;color:var(--text-3);margin-bottom:8px;line-height:1.6">
+              💬 把下面这段话整段发给任何 AI Agent（Claude Code / Cursor / Hermes / ChatGPT 等），它会自动从我们站点拉取 skill 并完成接入：
+            </div>
+            <button class="qs-copy" onclick="resCopyCmd('res-ag-pre', this)">复制</button>
+            <pre class="qs-pre" id="res-ag-pre" style="white-space:pre-wrap"></pre>
           </div>
         </div>
       </div>

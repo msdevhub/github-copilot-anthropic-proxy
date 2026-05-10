@@ -235,6 +235,19 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // Public skill manifest (Markdown) — agents can curl this to install the onboarding skill
+  if (req.method === "GET" && req.url === "/copilot-proxy-skill.md") {
+    try {
+      const content = readFileSync(join(PUBLIC_DIR, "copilot-proxy-skill.md"));
+      res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" });
+      res.end(content);
+    } catch {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("not found");
+    }
+    return;
+  }
+
   // Static assets (CSS/JS from public/)
   if (req.method === "GET" && (req.url === "/dashboard.css" || req.url === "/dashboard.js" || req.url === "/shared-charts.js" || req.url === "/user-dashboard.js")) {
     const file = req.url.slice(1);

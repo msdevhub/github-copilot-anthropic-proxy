@@ -63,12 +63,25 @@ function currentKeyForCmd() {
 
 function resTemplates(k) {
   const ow = `# 一键接入 copilot-proxy 到 ~/.openclaw/openclaw.json (交互式向导)\ncurl -fsSL "${RES_BASE_OPENAI.replace(/\/v1$/,'')}/install/openclaw?key=${k}" -o /tmp/cp-install.js && node /tmp/cp-install.js`;
+  const SITE = RES_BASE_OPENAI.replace(/\/v1$/,'');
+  const ag = `请帮我接入 Copilot Proxy 服务（Anthropic + OpenAI 双协议代理），按以下步骤执行：
+
+1. 从 ${SITE}/copilot-proxy-skill.md 拉取 skill 内容（curl/wget/web_fetch 都行），保存到 ~/.hermes/skills/autonomous-ai-agents/copilot-proxy-onboard/SKILL.md（如果是 Claude Code，则保存到 ~/.claude/skills/copilot-proxy-onboard/SKILL.md；如无 skill 系统，则把内容当作系统提示直接遵循）。
+2. 加载该 skill。
+3. 用我的 API Key = ${k} 按 skill 指引：先 curl /user/me 验 key + 看余额，再 curl /v1/models 拉真实模型列表，然后根据我使用的客户端（你判断或问我）输出可直接粘贴的配置，最后跑一次最小测试请求确认通路。
+
+Base URL（同一 key 通用）：
+  - Anthropic 协议: ${RES_BASE_ANTHROPIC}
+  - OpenAI 协议:    ${RES_BASE_OPENAI}
+
+直接开干，不要等我确认每一步。`;
   return {
-    cc: `npm i -g @anthropic-ai/claude-code\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nclaude`,
+    cc: `npm i -g @anthropic-ai/claude-code\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nclaude --model claude-opus-4.7 --dangerously-skip-permissions`,
     oc: `npm i -g opencode-ai\nexport ANTHROPIC_BASE_URL=${RES_BASE_ANTHROPIC}\nexport ANTHROPIC_AUTH_TOKEN=${k}\nopencode`,
     cx: `npm i -g @openai/codex\nexport OPENAI_BASE_URL=${RES_BASE_OPENAI}\nexport OPENAI_API_KEY=${k}\ncodex`,
     ow,
     hm: `hermes config set provider.anthropic.base_url ${RES_BASE_ANTHROPIC}\nhermes config set provider.anthropic.api_key ${k}`,
+    ag,
   };
 }
 
@@ -97,6 +110,7 @@ function renderResources(m) {
   setPre('res-cx-pre', t.cx);
   setPre('res-ow-pre', t.ow);
   setPre('res-hm-pre', t.hm);
+  setPre('res-ag-pre', t.ag);
 }
 
 window.resToggle = function() {
@@ -132,6 +146,7 @@ window.resToggleKey = function() {
   setPre('res-cx-pre', t.cx);
   setPre('res-ow-pre', t.ow);
   setPre('res-hm-pre', t.hm);
+  setPre('res-ag-pre', t.ag);
 };
 
 window.resCopyKey = function(btn) {
