@@ -166,7 +166,7 @@ window.resCopyKey = function(btn) {
 
 window.resSwitch = function(k) {
   document.querySelectorAll('[data-rk]').forEach(t => t.classList.toggle('active', t.dataset.rk === k));
-  ['cc','oc','cx','ow','hm'].forEach(id => {
+  ['cc','oc','cx','ow','hm','ag'].forEach(id => {
     const p = document.getElementById('res-' + id);
     if (p) p.style.display = (id === k) ? '' : 'none';
   });
@@ -175,7 +175,7 @@ window.resSwitch = function(k) {
 window.resCopyCmd = function(id, btn) {
   // The on-screen <pre> may contain the placeholder (when key is hidden); the
   // clipboard always gets the real key so the command actually works.
-  const tplKey = id.replace('res-', '').replace('-pre', ''); // 'cc' | 'oc' | 'cx' | 'ow' | 'hm'
+  const tplKey = id.replace('res-', '').replace('-pre', ''); // 'cc' | 'oc' | 'cx' | 'ow' | 'hm' | 'ag'
   const real = templateWithRealKey()[tplKey];
   const txt = real != null ? real : (document.getElementById(id)?.innerText || '');
   const proceed = () => {
