@@ -7,11 +7,25 @@ description: Help a user onboard to the Copilot Proxy service (api.eagle.opencla
 
 You're helping a user start using **api.eagle.openclaws.co.uk** — a Copilot-backed proxy that exposes Anthropic-compatible (`/v1/messages`) and OpenAI-compatible (`/v1/chat/completions`, `/v1/responses`) endpoints. The user already has an API key (format: `sk-proxy-...`).
 
+## Step 0 — installing this skill
+
+If you're reading this from a URL (https://api.eagle.openclaws.co.uk/copilot-proxy-skill.md) and you have a skill system, save this file to **your runtime's skill directory** — you decide where based on what you are:
+
+- **Claude Code**: `~/.claude/skills/copilot-proxy-onboard/SKILL.md`
+- **Hermes Agent**: `~/.hermes/skills/autonomous-ai-agents/copilot-proxy-onboard/SKILL.md`
+- **Cursor**: drop into `.cursor/rules/` as an `.mdc` file with the front-matter
+- **OpenCode / others**: whatever your skill / rules / instructions directory is
+- **No skill system**: just keep the contents in your context for this session
+
+Then proceed to Step 1.
+
 ## What you need from the user
 
 **Just one thing**: their API key (`sk-proxy-xxxxx`). Don't ask for anything else upfront.
 
 If they haven't given it yet, say: *"把你的 sk-proxy- 开头的 key 发我"* and stop.
+
+> **Public manifest URL**: this skill itself lives at `https://api.eagle.openclaws.co.uk/copilot-proxy-skill.md` (CORS open). If you (the agent) haven't already loaded this file from disk, fetch it from there first. Don't try to discover the skill from a search — the dashboard's "Agent" tab hands the user a paste-ready prompt that points to this exact URL.
 
 ## Step 1 — verify the key + discover models
 
